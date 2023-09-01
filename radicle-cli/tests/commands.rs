@@ -7,7 +7,7 @@ use radicle::node;
 use radicle::node::address::Store as _;
 use radicle::node::routing::Store as _;
 use radicle::node::Handle as _;
-use radicle::node::{Alias, DEFAULT_TIMEOUT};
+use radicle::node::{Alias, State, DEFAULT_TIMEOUT};
 use radicle::prelude::Id;
 use radicle::profile::Home;
 use radicle::storage::{ReadStorage, RemoteRepository};
@@ -365,8 +365,10 @@ fn rad_node_connect() {
     let session = sessions.first().unwrap();
 
     assert_eq!(session.nid, bob.id);
-    assert_eq!(session.addr, bob.addr.into());
-    assert!(session.state.is_connected());
+    assert!(matches!(
+        &session.state,
+        State::Connected { addr, .. } if *addr == bob.addr.into(),
+    ));
 }
 
 #[test]

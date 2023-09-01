@@ -782,7 +782,7 @@ where
         debug!(target: "service", "Attempted connection to {nid} ({addr})");
 
         if let Some(sess) = self.sessions.get_mut(&nid) {
-            sess.to_attempted();
+            sess.to_attempted(addr);
         } else {
             #[cfg(debug_assertions)]
             panic!("Service::attempted: unknown session {nid}@{addr}");
@@ -796,14 +796,17 @@ where
         let msgs = self.initial(link);
         let now = self.time();
 
-        if link.is_outbound() {
+        let peer = if link.is_outbound() {
             if let Some(peer) = self.sessions.get_mut(&remote) {
                 peer.to_connected(self.clock);
-                self.outbox.write_all(peer, msgs);
 
-                if let Err(e) = self.addresses.connected(&remote, &peer.addr, now) {
+                if let Err(e) = self.addresses.connected(&remote, &addr, now) {
                     error!(target: "service", "Error updating address book with connection: {e}");
                 }
+                peer
+            } else {
+                warn!(target: "service", "No session for connected peer");
+                return;
             }
         } else {
             match self.sessions.entry(remote) {
@@ -812,6 +815,7 @@ where
                         target: "service",
                         "Connecting peer {remote} already has a session open ({})", e.get()
                     );
+                    return;
                 }
                 Entry::Vacant(e) => {
                     let peer = e.insert(Session::inbound(
@@ -822,10 +826,11 @@ where
                         self.clock,
                         self.config.limits.clone(),
                     ));
-                    self.outbox.write_all(peer, msgs);
+                    peer
                 }
             }
-        }
+        };
+        self.outbox.write_all(peer, msgs);
     }
 
     pub fn disconnected(&mut self, remote: NodeId, reason: &DisconnectReason) {
@@ -1159,11 +1164,21 @@ where
             Link::Outbound => &self.config.limits.rate.outbound,
             Link::Inbound => &self.config.limits.rate.inbound,
         };
-        if self
-            .limiter
-            .limit(peer.addr.clone().into(), limit, self.clock)
-        {
-            trace!(target: "service", "Rate limiting message from {remote} ({})", peer.addr);
+
+        let (addr, ping) = match &mut peer.state {
+            session::State::Attempted { .. } | session::State::Initial { .. } => {
+                error!(target: "service", "Received {:?} from connecting peer {}", message, peer.id);
+                return Ok(());
+            }
+            session::State::Disconnected { .. } => {
+                debug!(target: "service", "Ignoring {:?} from disconnected peer {}", message, peer.id);
+                return Ok(());
+            }
+            session::State::Connected { addr, ping, .. } => (addr, ping),
+        };
+
+        if self.limiter.limit(addr.clone().into(), limit, self.clock) {
+            trace!(target: "service", "Rate limiting message from {remote} ({})", addr);
             return Ok(());
         }
         peer.last_active = self.clock;
@@ -1171,11 +1186,11 @@ where
 
         trace!(target: "service", "Received message {:?} from {}", &message, peer.id);
 
-        match (&mut peer.state, message) {
+        match message {
             // Process a peer announcement.
-            (session::State::Connected { .. }, Message::Announcement(ann)) => {
+            Message::Announcement(ann) => {
                 let relayer = peer.id;
-                let relayer_addr = peer.addr.clone();
+                let relayer_addr = addr.clone();
                 let announcer = ann.node;
 
                 // Returning true here means that the message should be relayed.
@@ -1194,7 +1209,7 @@ where
                     return Ok(());
                 }
             }
-            (session::State::Connected { .. }, Message::Subscribe(subscribe)) => {
+            Message::Subscribe(subscribe) => {
                 // Filter announcements by interest.
                 match self
                     .gossip
@@ -1222,7 +1237,7 @@ where
                 }
                 peer.subscribe = Some(subscribe);
             }
-            (session::State::Connected { .. }, Message::Ping(Ping { ponglen, .. })) => {
+            Message::Ping(Ping { ponglen, .. }) => {
                 // Ignore pings which ask for too much data.
                 if ponglen > Ping::MAX_PONG_ZEROES {
                     return Ok(());
@@ -1234,18 +1249,12 @@ where
                     },
                 );
             }
-            (session::State::Connected { ping, .. }, Message::Pong { zeroes }) => {
+            Message::Pong { zeroes } => {
                 if let session::PingState::AwaitingResponse(ponglen) = *ping {
                     if (ponglen as usize) == zeroes.len() {
                         *ping = session::PingState::Ok;
                     }
                 }
-            }
-            (session::State::Attempted { .. } | session::State::Initial, msg) => {
-                error!(target: "service", "Received {:?} from connecting peer {}", msg, peer.id);
-            }
-            (session::State::Disconnected { .. }, msg) => {
-                debug!(target: "service", "Ignoring {:?} from disconnected peer {}", msg, peer.id);
             }
         }
         Ok(())
@@ -1479,7 +1488,6 @@ where
             nid,
             Session::outbound(
                 nid,
-                addr.clone(),
                 persistent,
                 self.rng.clone(),
                 self.config.limits.clone(),

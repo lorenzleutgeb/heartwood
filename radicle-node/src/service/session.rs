@@ -57,8 +57,6 @@ impl Error {
 pub struct Session {
     /// Peer id.
     pub id: NodeId,
-    /// Peer address.
-    pub addr: Address,
     /// Connection direction.
     pub link: Link,
     /// Whether we should attempt to re-connect
@@ -103,10 +101,9 @@ impl fmt::Display for Session {
 }
 
 impl Session {
-    pub fn outbound(id: NodeId, addr: Address, persistent: bool, rng: Rng, limits: Limits) -> Self {
+    pub fn outbound(id: NodeId, persistent: bool, rng: Rng, limits: Limits) -> Self {
         Self {
             id,
-            addr,
             state: State::Initial,
             link: Link::Outbound,
             subscribe: None,
@@ -129,9 +126,9 @@ impl Session {
     ) -> Self {
         Self {
             id,
-            addr,
             state: State::Connected {
                 since: time,
+                addr,
                 ping: PingState::default(),
                 fetching: HashSet::default(),
             },
@@ -196,23 +193,24 @@ impl Session {
         None
     }
 
-    pub fn to_attempted(&mut self) {
+    pub fn to_attempted(&mut self, addr: Address) {
         assert!(
             self.is_initial(),
             "Can only transition to 'attempted' state from 'initial' state"
         );
-        self.state = State::Attempted;
+        self.state = State::Attempted { addr };
         self.attempts += 1;
     }
 
     pub fn to_connected(&mut self, since: LocalTime) {
         self.attempts = 0;
 
-        let State::Attempted = &self.state else {
+        let State::Attempted { addr } = &self.state else {
             panic!("Session::to_connected: can only transition to 'connected' state from 'attempted' state");
         };
         self.state = State::Connected {
             since,
+            addr: addr.clone(),
             ping: PingState::default(),
             fetching: HashSet::default(),
         };
