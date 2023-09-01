@@ -33,7 +33,7 @@ impl<T, const N: usize> BoundedVec<T, N> {
     /// assert_eq!(bounded.len(), 3);
     /// assert_eq!(iter.count(), 1);
     /// ```
-    pub fn collect_from<I: Iterator<Item = T>>(iter: &mut I) -> Self {
+    pub fn collect_from<I: IntoIterator<Item = T>>(iter: I) -> Self {
         BoundedVec {
             v: iter.into_iter().take(N).collect(),
         }
@@ -167,6 +167,7 @@ impl<T, const N: usize> ops::Deref for BoundedVec<T, N> {
 
 impl<T, const N: usize> From<Option<T>> for BoundedVec<T, N> {
     fn from(value: Option<T>) -> Self {
+        debug_assert!(1 <= N);
         let v = match value {
             None => vec![],
             Some(v) => vec![v],

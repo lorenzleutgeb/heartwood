@@ -604,11 +604,10 @@ mod tests {
         let timestamp = 0;
         let at = raw::Oid::zero().into();
         let refs = BoundedVec::collect_from(
-            &mut [RefsAt {
+            [RefsAt {
                 remote: *signer.public_key(),
                 at,
             }]
-            .into_iter(),
         );
         let message = AnnouncementMessage::Refs(RefsAnnouncement {
             rid,
