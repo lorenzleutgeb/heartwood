@@ -6,7 +6,7 @@ use std::{process, thread, time};
 use localtime::LocalTime;
 
 use radicle::node;
-use radicle::node::{Address, ConnectResult, Handle as _, NodeId};
+use radicle::node::{ConnectAddress, ConnectResult, Handle as _};
 use radicle::Node;
 use radicle::{profile, Profile};
 
@@ -156,17 +156,21 @@ pub fn logs(lines: usize, follow: Option<time::Duration>, profile: &Profile) -> 
 
 pub fn connect(
     node: &mut Node,
-    nid: NodeId,
-    addr: Address,
+    connect_address: ConnectAddress,
     timeout: time::Duration,
 ) -> anyhow::Result<()> {
-    let spinner = term::spinner(format!(
-        "Connecting to {}@{addr}...",
-        term::format::node(&nid)
-    ));
+    let spinner = match &connect_address.addr_opt {
+        Some(addr) => term::spinner(format!(
+            "Connecting to {}@{addr}...",
+            term::format::node(&connect_address.node_id)
+        )),
+        None => term::spinner(format!(
+            "Connecting to {}...",
+            term::format::node(&connect_address.node_id)
+        )),
+    };
     match node.connect(
-        nid,
-        addr,
+        connect_address,
         node::ConnectOptions {
             persistent: true,
             timeout,

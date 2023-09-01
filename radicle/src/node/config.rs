@@ -1,9 +1,9 @@
 use std::collections::HashSet;
-use std::net;
-use std::ops::Deref;
+use std::{fmt, str, net};
 
 use cyphernet::addr::PeerAddr;
 use localtime::LocalDuration;
+use thiserror::Error;
 
 use crate::node;
 use crate::node::tracking::{Policy, Scope};
@@ -23,7 +23,7 @@ pub enum Network {
 
 impl Network {
     /// Bootstrap nodes for this network.
-    pub fn bootstrap(&self) -> Vec<(Alias, ConnectAddress)> {
+    pub fn bootstrap(&self) -> Vec<(Alias, NodeId, Address)> {
         use std::str::FromStr;
 
         match self {
@@ -39,7 +39,11 @@ impl Network {
             ]
             .into_iter()
             // SAFETY: These are valid addresses.
-            .map(|(a, s)| (Alias::new(a), PeerAddr::from_str(s).unwrap().into()))
+            .map(|(a, s)| {
+                let alias = Alias::new(a);
+                let PeerAddr { id: nid, addr } = PeerAddr::from_str(s).unwrap();
+                (alias, nid, addr)
+            })
             .collect(),
 
             Self::Test => vec![],
@@ -109,43 +113,6 @@ impl Default for RateLimits {
     }
 }
 
-/// Full address used to connect to a remote node.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Hash)]
-#[serde(transparent)]
-pub struct ConnectAddress(#[serde(with = "crate::serde_ext::string")] PeerAddr<NodeId, Address>);
-
-impl From<PeerAddr<NodeId, Address>> for ConnectAddress {
-    fn from(value: PeerAddr<NodeId, Address>) -> Self {
-        Self(value)
-    }
-}
-
-impl From<ConnectAddress> for (NodeId, Address) {
-    fn from(value: ConnectAddress) -> Self {
-        (value.0.id, value.0.addr)
-    }
-}
-
-impl From<(NodeId, Address)> for ConnectAddress {
-    fn from((id, addr): (NodeId, Address)) -> Self {
-        Self(PeerAddr { id, addr })
-    }
-}
-
-impl From<ConnectAddress> for Address {
-    fn from(value: ConnectAddress) -> Self {
-        value.0.addr
-    }
-}
-
-impl Deref for ConnectAddress {
-    type Target = PeerAddr<NodeId, Address>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 /// Peer configuration.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
@@ -160,6 +127,103 @@ impl Default for PeerConfig {
     fn default() -> Self {
         Self::Dynamic {
             target: TARGET_OUTBOUND_PEERS,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Hash)]
+#[serde(try_from = "String", into = "String")]
+pub struct ConnectAddress {
+    pub node_id: NodeId,
+    pub addr_opt: Option<Address>,
+}
+
+impl From<PeerAddr<NodeId, Address>> for ConnectAddress {
+    fn from(value: PeerAddr<NodeId, Address>) -> Self {
+        let PeerAddr { id, addr } = value;
+        ConnectAddress {
+            node_id: id,
+            addr_opt: Some(addr),
+        }
+    }
+}
+
+impl TryFrom<String> for ConnectAddress {
+    type Error = ConnectAddressParseError;
+
+    fn try_from(s: String) -> Result<Self, ConnectAddressParseError> {
+        str::FromStr::from_str(&s)
+    }
+}
+
+impl Into<String> for ConnectAddress {
+    fn into(self) -> String {
+        self.to_string()
+    }
+}
+
+impl From<ConnectAddress> for (NodeId, Option<Address>) {
+    fn from(value: ConnectAddress) -> Self {
+        (value.node_id, value.addr_opt)
+    }
+}
+
+impl From<(NodeId, Address)> for ConnectAddress {
+    fn from((id, addr): (NodeId, Address)) -> Self {
+        ConnectAddress {
+            node_id: id,
+            addr_opt: Some(addr),
+        }
+    }
+}
+
+impl From<(NodeId, Option<Address>)> for ConnectAddress {
+    fn from((node_id, addr_opt): (NodeId, Option<Address>)) -> Self {
+        ConnectAddress { node_id, addr_opt }
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum ConnectAddressParseError {
+    #[error("invalid node id")]
+    InvalidNodeId(crypto::PublicKeyError),
+    #[error("invalid address")]
+    InvalidAddress(cyphernet::addr::AddrParseError),
+}
+
+impl str::FromStr for ConnectAddress {
+    type Err = ConnectAddressParseError;
+
+    fn from_str(s: &str) -> Result<Self, ConnectAddressParseError> {
+        let ret = match s.split_once('@') {
+            None => {
+                let node_id =
+                    NodeId::from_str(s).map_err(ConnectAddressParseError::InvalidNodeId)?;
+                ConnectAddress {
+                    node_id,
+                    addr_opt: None,
+                }
+            }
+            Some((node_id, addr)) => {
+                let node_id =
+                    NodeId::from_str(node_id).map_err(ConnectAddressParseError::InvalidNodeId)?;
+                let addr =
+                    Address::from_str(addr).map_err(ConnectAddressParseError::InvalidAddress)?;
+                ConnectAddress {
+                    node_id,
+                    addr_opt: Some(addr),
+                }
+            }
+        };
+        Ok(ret)
+    }
+}
+
+impl fmt::Display for ConnectAddress {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self.addr_opt {
+            None => write!(f, "{}", self.node_id),
+            Some(addr) => write!(f, "{}@{}", self.node_id, addr),
         }
     }
 }
@@ -225,11 +289,10 @@ impl Config {
 }
 
 impl Config {
-    pub fn peer(&self, id: &NodeId) -> Option<&Address> {
-        self.connect
-            .iter()
-            .find(|ca| &ca.id == id)
-            .map(|ca| &ca.addr)
+    pub fn peer(&self, id: &NodeId) -> Option<Option<&Address>> {
+        self.connect.iter().find_map(|connect_addr| {
+            (connect_addr.node_id == *id).then_some(connect_addr.addr_opt.as_ref())
+        })
     }
 
     pub fn is_persistent(&self, id: &NodeId) -> bool {

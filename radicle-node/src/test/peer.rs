@@ -347,8 +347,7 @@ where
 
         self.initialize();
         self.service.command(Command::Connect(
-            remote_id,
-            remote_addr.clone(),
+            (remote_id, remote_addr.clone()).into(),
             ConnectOptions::default(),
         ));
 

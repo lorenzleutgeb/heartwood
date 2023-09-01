@@ -122,9 +122,15 @@ fn test_redundant_connect() {
     let bob = Peer::new("bob", [9, 9, 9, 9]);
     let opts = ConnectOptions::default();
 
-    alice.command(Command::Connect(bob.id(), bob.address(), opts.clone()));
-    alice.command(Command::Connect(bob.id(), bob.address(), opts.clone()));
-    alice.command(Command::Connect(bob.id(), bob.address(), opts));
+    alice.command(Command::Connect(
+        (bob.id(), bob.address()).into(),
+        opts.clone(),
+    ));
+    alice.command(Command::Connect(
+        (bob.id(), bob.address()).into(),
+        opts.clone(),
+    ));
+    alice.command(Command::Connect((bob.id(), bob.address()).into(), opts));
 
     // Only one connection attempt is made.
     assert_matches!(
@@ -147,8 +153,7 @@ fn test_connection_kept_alive() {
     .initialize([&mut alice, &mut bob]);
 
     alice.command(service::Command::Connect(
-        bob.id(),
-        bob.address(),
+        (bob.id(), bob.address()).into(),
         ConnectOptions::default(),
     ));
     sim.run_while([&mut alice, &mut bob], |s| !s.is_settled());
@@ -1290,13 +1295,11 @@ fn test_push_and_pull() {
 
     // Alice and Bob connect to Eve.
     alice.command(service::Command::Connect(
-        eve.id(),
-        eve.address(),
+        (eve.id(), eve.address()).into(),
         ConnectOptions::default(),
     ));
     bob.command(service::Command::Connect(
-        eve.id(),
-        eve.address(),
+        (eve.id(), eve.address()).into(),
         ConnectOptions::default(),
     ));
 
@@ -1405,18 +1408,15 @@ fn prop_inventory_exchange_dense() {
 
         // Fully-connected.
         bob.command(Command::Connect(
-            alice.id(),
-            alice.address(),
+            (alice.id(), alice.address()).into(),
             ConnectOptions::default(),
         ));
         bob.command(Command::Connect(
-            eve.id(),
-            eve.address(),
+            (eve.id(), eve.address()).into(),
             ConnectOptions::default(),
         ));
         eve.command(Command::Connect(
-            alice.id(),
-            alice.address(),
+            (alice.id(), alice.address()).into(),
             ConnectOptions::default(),
         ));
 

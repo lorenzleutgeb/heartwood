@@ -33,7 +33,7 @@ use radicle::storage::{ReadStorage as _, RemoteRepository as _, SignRepository a
 use radicle::test::fixtures;
 use radicle::Storage;
 
-use crate::node::NodeId;
+use crate::node::{Address, ConnectAddress, NodeId};
 use crate::service::Event;
 use crate::storage::git::transport;
 use crate::{runtime, runtime::Handle, service, Runtime};
@@ -179,15 +179,16 @@ impl<G: Signer + cyphernet::Ecdh + 'static> Drop for NodeHandle<G> {
 }
 
 impl<G: Signer + cyphernet::Ecdh> NodeHandle<G> {
-    /// Connect this node to another node, and wait for the connection to be established both ways.
-    pub fn connect(&mut self, remote: &NodeHandle<G>) -> &mut Self {
+    pub fn start_connect(&mut self, connect_address: ConnectAddress) -> &mut Self {
+        self.handle
+            .connect(connect_address, ConnectOptions::default())
+            .ok();
+        self
+    }
+
+    pub fn finish_connect(&self, remote: &NodeHandle<G>) -> &Self {
         let local_events = self.handle.events();
         let remote_events = remote.handle.events();
-
-        self.handle
-            .connect(remote.id, remote.addr.into(), ConnectOptions::default())
-            .ok();
-
         local_events
             .iter()
             .find(|e| {
@@ -204,7 +205,22 @@ impl<G: Signer + cyphernet::Ecdh> NodeHandle<G> {
                 )
             })
             .unwrap();
+        self
+    }
 
+    /// Connect this node to another node, and wait for the connection to be established both ways.
+    pub fn connect(&mut self, remote: &NodeHandle<G>) -> &mut Self {
+        self.start_connect((remote.id, remote.address()).into());
+        self.finish_connect(remote);
+
+        self
+    }
+
+    /// Connect this node to another node, and wait for the connection to be established both ways,
+    /// but don't pass the node's address to the service.
+    pub fn connect_without_address(&mut self, remote: &NodeHandle<G>) -> &mut Self {
+        self.start_connect((remote.id, None).into());
+        self.finish_connect(remote);
         self
     }
 
@@ -323,6 +339,10 @@ impl<G: Signer + cyphernet::Ecdh> NodeHandle<G> {
             .create(title, desc, &[], &[], [], &self.signer)
             .unwrap()
             .id()
+    }
+
+    pub fn address(&self) -> Address {
+        Address::from(self.addr)
     }
 }
 

@@ -27,7 +27,7 @@ use crate::profile;
 use crate::storage::RefUpdate;
 
 pub use address::KnownAddress;
-pub use config::Config;
+pub use config::{Config, ConnectAddress};
 pub use cyphernet::addr::{HostName, PeerAddr};
 pub use events::{Event, Events};
 pub use features::Features;
@@ -345,7 +345,7 @@ pub enum Command {
     /// Connect to node with the given address.
     #[serde(rename_all = "camelCase")]
     Connect {
-        addr: config::ConnectAddress,
+        connect_address: ConnectAddress,
         opts: ConnectOptions,
     },
 
@@ -661,8 +661,7 @@ pub trait Handle: Clone + Sync + Send {
     /// Connect to a peer.
     fn connect(
         &mut self,
-        node: NodeId,
-        addr: Address,
+        connect_address: ConnectAddress,
         opts: ConnectOptions,
     ) -> Result<ConnectResult, Self::Error>;
     /// Lookup the seeds of a given repository in the routing table.
@@ -824,15 +823,14 @@ impl Handle for Node {
 
     fn connect(
         &mut self,
-        nid: NodeId,
-        addr: Address,
+        connect_address: ConnectAddress,
         opts: ConnectOptions,
     ) -> Result<ConnectResult, Error> {
         let timeout = opts.timeout;
         let result = self
             .call::<ConnectResult>(
                 Command::Connect {
-                    addr: (nid, addr).into(),
+                    connect_address,
                     opts,
                 },
                 timeout,

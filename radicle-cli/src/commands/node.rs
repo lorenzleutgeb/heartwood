@@ -3,7 +3,7 @@ use std::time;
 
 use anyhow::anyhow;
 
-use radicle::node::{Address, Node, NodeId, PeerAddr, ROUTING_DB_FILE};
+use radicle::node::{ConnectAddress, Node, NodeId, ROUTING_DB_FILE};
 use radicle::prelude::Id;
 
 use crate::terminal as term;
@@ -71,7 +71,7 @@ pub struct Options {
 
 pub enum Operation {
     Connect {
-        addr: PeerAddr<NodeId, Address>,
+        connect_address: ConnectAddress,
         timeout: time::Duration,
     },
     Config,
@@ -134,7 +134,7 @@ impl Args for Options {
         let mut nid: Option<NodeId> = None;
         let mut rid: Option<Id> = None;
         let mut json: bool = false;
-        let mut addr: Option<PeerAddr<NodeId, Address>> = None;
+        let mut addr: Option<ConnectAddress> = None;
         let mut lines: usize = 60;
         let mut count: usize = usize::MAX;
         let mut timeout = time::Duration::MAX;
@@ -204,12 +204,18 @@ impl Args for Options {
         }
 
         let op = match op.unwrap_or_default() {
-            OperationName::Connect => Operation::Connect {
-                addr: addr.ok_or_else(|| {
-                    anyhow!("an address of the form `<nid>@<host>:<port>` must be provided")
-                })?,
-                timeout,
-            },
+            OperationName::Connect => {
+                let connect_address = match addr {
+                    Some(connect_address) => connect_address,
+                    None => anyhow::bail!(
+                        "an address of the form `<nid>[@<host>:<port>]` must be provided"
+                    ),
+                };
+                Operation::Connect {
+                    connect_address,
+                    timeout,
+                }
+            }
             OperationName::Config => Operation::Config,
             OperationName::Events => Operation::Events { timeout, count },
             OperationName::Routing => Operation::Routing { rid, nid, json },
@@ -235,9 +241,10 @@ pub fn run(options: Options, ctx: impl term::Context) -> anyhow::Result<()> {
     let mut node = Node::new(profile.socket());
 
     match options.op {
-        Operation::Connect { addr, timeout } => {
-            control::connect(&mut node, addr.id, addr.addr, timeout)?
-        }
+        Operation::Connect {
+            connect_address,
+            timeout,
+        } => control::connect(&mut node, connect_address, timeout)?,
         Operation::Config => control::config(&node)?,
         Operation::Sessions => {
             let sessions = control::sessions(&node)?;

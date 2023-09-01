@@ -355,8 +355,7 @@ fn fetch_all(
                 &ka.addr
             ));
             let cr = node.connect(
-                seed.nid,
-                ka.addr,
+                (seed.nid, ka.addr).into(),
                 node::ConnectOptions {
                     persistent: false,
                     timeout,

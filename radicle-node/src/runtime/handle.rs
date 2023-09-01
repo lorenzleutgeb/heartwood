@@ -9,7 +9,7 @@ use reactor::poller::popol::PopolWaker;
 use thiserror::Error;
 
 use crate::identity::Id;
-use crate::node::{Alias, Command, FetchResult};
+use crate::node::{Alias, Command, ConnectAddress, FetchResult};
 use crate::profile::Home;
 use crate::runtime::Emitter;
 use crate::service;
@@ -145,27 +145,28 @@ impl radicle::node::Handle for Handle {
 
     fn connect(
         &mut self,
-        node: NodeId,
-        addr: radicle::node::Address,
+        connect_address: ConnectAddress,
         opts: ConnectOptions,
     ) -> Result<ConnectResult, Error> {
         let events = self.events();
         let timeout = opts.timeout;
         let sessions = self.sessions()?;
-        let session = sessions.iter().find(|s| s.nid == node);
+        let session = sessions.iter().find(|s| s.nid == connect_address.node_id);
 
         if let Some(s) = session {
             if s.state.is_connected() {
                 return Ok(ConnectResult::Connected);
             }
         }
-        self.command(service::Command::Connect(node, addr, opts))?;
+        self.command(service::Command::Connect(connect_address.clone(), opts))?;
 
         events
             .wait(
                 |e| match e {
-                    Event::PeerConnected { nid } if nid == &node => Some(ConnectResult::Connected),
-                    Event::PeerDisconnected { nid, reason } if nid == &node => {
+                    Event::PeerConnected { nid } if nid == &connect_address.node_id => {
+                        Some(ConnectResult::Connected)
+                    }
+                    Event::PeerDisconnected { nid, reason } if nid == &connect_address.node_id => {
                         Some(ConnectResult::Disconnected {
                             reason: reason.clone(),
                         })

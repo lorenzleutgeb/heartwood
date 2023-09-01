@@ -92,16 +92,16 @@ where
     let cmd: Command = json::from_str(input)?;
 
     match cmd {
-        Command::Connect { addr, opts } => {
-            let (nid, addr) = addr.into();
-            match handle.connect(nid, addr, opts) {
-                Err(e) => return Err(CommandError::Runtime(e)),
-                Ok(result) => {
-                    json::to_writer(&mut writer, &result)?;
-                    writer.write_all(b"\n")?;
-                }
+        Command::Connect {
+            connect_address,
+            opts,
+        } => match handle.connect(connect_address, opts) {
+            Err(e) => return Err(CommandError::Runtime(e)),
+            Ok(result) => {
+                json::to_writer(&mut writer, &result)?;
+                writer.write_all(b"\n")?;
             }
-        }
+        },
         Command::Fetch { rid, nid, timeout } => {
             fetch(rid, nid, timeout, writer, &mut handle)?;
         }

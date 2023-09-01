@@ -47,7 +47,7 @@ use crate::worker::FetchError;
 use crate::Link;
 
 pub use crate::node::events::{Event, Events};
-pub use crate::node::{config::Network, Config, NodeId};
+pub use crate::node::{config::Network, Config, ConnectAddress, NodeId};
 pub use crate::service::message::{Message, ZeroBytes};
 pub use crate::service::session::Session;
 
@@ -141,7 +141,7 @@ pub enum Command {
     /// Announce local inventory to peers.
     SyncInventory(chan::Sender<bool>),
     /// Connect to node with the given address.
-    Connect(NodeId, Address, ConnectOptions),
+    Connect(ConnectAddress, ConnectOptions),
     /// Disconnect from node.
     Disconnect(NodeId),
     /// Get the node configuration.
@@ -168,7 +168,9 @@ impl fmt::Debug for Command {
             Self::AnnounceRefs(id) => write!(f, "AnnounceRefs({id})"),
             Self::AnnounceInventory => write!(f, "AnnounceInventory"),
             Self::SyncInventory(_) => write!(f, "SyncInventory(..)"),
-            Self::Connect(id, addr, opts) => write!(f, "Connect({id}, {addr}, {opts:?})"),
+            Self::Connect(connect_address, opts) => {
+                write!(f, "Connect({connect_address}, {opts:?})")
+            }
             Self::Disconnect(id) => write!(f, "Disconnect({id})"),
             Self::Config(_) => write!(f, "Config"),
             Self::Seeds(id, _) => write!(f, "Seeds({id})"),
@@ -410,8 +412,8 @@ where
 
         // Connect to configured peers.
         let addrs = self.config.connect.clone();
-        for (id, addr) in addrs.into_iter().map(|ca| ca.into()) {
-            self.connect(id, addr);
+        for connect_address in addrs {
+            self.connect(connect_address);
         }
         // Ensure that our inventory is recorded in our routing table, and we are tracking
         // all of it. It can happen that inventory is not properly tracked if for eg. the
@@ -519,11 +521,11 @@ where
         info!(target: "service", "Received command {:?}", cmd);
 
         match cmd {
-            Command::Connect(nid, addr, opts) => {
+            Command::Connect(connect_address, opts) => {
                 if opts.persistent {
-                    self.config.connect.insert((nid, addr.clone()).into());
+                    self.config.connect.insert(connect_address.clone());
                 }
-                if !self.connect(nid, addr) {
+                if !self.connect(connect_address) {
                     // TODO: Return error to command.
                 }
             }
@@ -1400,17 +1402,66 @@ where
         }
     }
 
-    fn reconnect(&mut self, nid: NodeId, addr: Address) -> bool {
-        if let Some(sess) = self.sessions.get_mut(&nid) {
+    fn reconnect(&mut self, connect_address: ConnectAddress) -> bool {
+        let addr_opt = connect_address.addr_opt.or_else(|| {
+            match self.addresses.get(&connect_address.node_id) {
+                Ok(node_addresses_opt) => {
+                    // FIXME: we should iterate through addresses
+                    // also try the most-recently-successful one first
+                    Some(node_addresses_opt?.addrs.first()?.addr.clone())
+                }
+                Err(e) => {
+                    error!(target: "service", "Error reading address book: {e}");
+                    None
+                }
+            }
+        });
+        let Some(addr) = addr_opt else {
+            warn!(target: "service", "reconnecting without an address is not implemented");
+            return false;
+        };
+
+        if let Some(sess) = self.sessions.get_mut(&connect_address.node_id) {
             sess.to_initial();
-            self.outbox.connect(nid, addr);
+            self.outbox.connect(connect_address.node_id, addr);
 
             return true;
         }
         false
     }
 
-    fn connect(&mut self, nid: NodeId, addr: Address) -> bool {
+    fn connect(&mut self, connect_address: ConnectAddress) -> bool {
+        let ConnectAddress { node_id, addr_opt } = connect_address;
+        if self.sessions.contains_key(&node_id) {
+            warn!(target: "service", "Attempted connection to peer {node_id} which already has a session");
+            return false;
+        }
+        if node_id == self.node_id() {
+            error!(target: "service", "Attempted connection to self");
+            return false;
+        }
+
+        let addr_opt = addr_opt.or_else(|| {
+            match self.addresses.get(&node_id) {
+                Ok(node_addresses_opt) => {
+                    // FIXME: we should iterate through addresses
+                    // also try the most-recently-successful one first
+                    Some(node_addresses_opt?.addrs.first()?.addr.clone())
+                }
+                Err(e) => {
+                    error!(target: "service", "Error reading address book: {e}");
+                    None
+                }
+            }
+        });
+        let Some(addr) = addr_opt else {
+            warn!(target: "service", "reconnecting without an address is not implemented");
+            return false;
+        };
+        self.connect_with_addr(node_id, addr)
+    }
+
+    fn connect_with_addr(&mut self, nid: NodeId, addr: Address) -> bool {
         if self.sessions.contains_key(&nid) {
             warn!(target: "service", "Attempted connection to peer {nid} which already has a session");
             return false;
@@ -1628,7 +1679,7 @@ where
             })
             .take(wanted)
         {
-            self.connect(id, ka.addr.clone());
+            self.connect((id, ka.addr.clone()).into());
         }
     }
 
@@ -1637,23 +1688,24 @@ where
         trace!(target: "service", "Maintaining persistent peers..");
 
         let now = self.local_time();
-        let mut reconnect = Vec::new();
+        let mut reconnect: Vec<(ConnectAddress, usize)> = Vec::new();
 
         for (nid, session) in self.sessions.iter_mut() {
-            if let Some(addr) = self.config.peer(nid) {
+            if let Some(addr_opt) = self.config.peer(nid) {
                 if let session::State::Disconnected { retry_at, .. } = &mut session.state {
                     // TODO: Try to reconnect only if the peer was attempted. A disconnect without
                     // even a successful attempt means that we're unlikely to be able to reconnect.
 
                     if now >= *retry_at {
-                        reconnect.push((*nid, addr.clone(), session.attempts()));
+                        reconnect.push(((*nid, addr_opt.cloned()).into(), session.attempts()));
                     }
                 }
             }
         }
 
-        for (nid, addr, attempts) in reconnect {
-            if self.reconnect(nid, addr) {
+        for (connect_address, attempts) in reconnect {
+            let nid = connect_address.node_id;
+            if self.reconnect(connect_address) {
                 debug!(target: "service", "Reconnecting to {nid} (attempts={attempts})...");
             }
         }

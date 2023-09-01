@@ -756,10 +756,13 @@ fn test_connection_crossing() {
 
     alice
         .handle
-        .connect(bob.id, bob.addr.into(), ConnectOptions::default())
+        .connect((bob.id, bob.address()).into(), ConnectOptions::default())
         .unwrap();
     bob.handle
-        .connect(alice.id, alice.addr.into(), ConnectOptions::default())
+        .connect(
+            (alice.id, alice.address()).into(),
+            ConnectOptions::default(),
+        )
         .unwrap();
 
     thread::sleep(time::Duration::from_secs(1));

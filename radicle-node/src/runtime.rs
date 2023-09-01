@@ -194,9 +194,7 @@ impl Runtime {
         if config.connect.is_empty() && addresses.is_empty()? {
             log::info!(target: "node", "Address book is empty. Adding bootstrap nodes..");
 
-            for (alias, addr) in config.network.bootstrap() {
-                let (id, addr) = addr.into();
-
+            for (alias, id, addr) in config.network.bootstrap() {
                 addresses.insert(
                     &id,
                     radicle::node::Features::SEED,
