@@ -11,6 +11,7 @@ pub mod session;
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::{fmt, time};
@@ -789,7 +790,7 @@ where
         }
     }
 
-    pub fn connected(&mut self, remote: NodeId, addr: Address, link: Link) {
+    pub fn connected(&mut self, remote: NodeId, local_addr: SocketAddr, addr: Address, link: Link) {
         info!(target: "service", "Connected to {} ({:?})", remote, link);
         self.emitter.emit(Event::PeerConnected { nid: remote });
 
@@ -798,7 +799,7 @@ where
 
         let peer = if link.is_outbound() {
             if let Some(peer) = self.sessions.get_mut(&remote) {
-                peer.to_connected(self.clock);
+                peer.to_connected(self.clock, local_addr);
 
                 if let Err(e) = self.addresses.connected(&remote, &addr, now) {
                     error!(target: "service", "Error updating address book with connection: {e}");
@@ -821,6 +822,7 @@ where
                     let peer = e.insert(Session::inbound(
                         remote,
                         addr,
+                        local_addr,
                         self.config.is_persistent(&remote),
                         self.rng.clone(),
                         self.clock,
@@ -1432,7 +1434,11 @@ where
 
         if let Some(sess) = self.sessions.get_mut(&connect_address.node_id) {
             sess.to_initial();
-            self.outbox.connect(connect_address.node_id, addr);
+            self.outbox.connect(
+                connect_address.node_id,
+                (Ipv4Addr::UNSPECIFIED, 0).into(),
+                addr,
+            );
 
             return true;
         }
@@ -1493,7 +1499,8 @@ where
                 self.config.limits.clone(),
             ),
         );
-        self.outbox.connect(nid, addr);
+        self.outbox
+            .connect(nid, (Ipv4Addr::UNSPECIFIED, 0).into(), addr);
 
         true
     }

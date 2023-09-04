@@ -227,7 +227,7 @@ impl Runtime {
         let mut local_addrs = Vec::new();
 
         for addr in listen {
-            let listener = NetAccept::bind(&addr)?;
+            let listener = NetAccept::bind_reusable(&addr)?;
             let local_addr = listener.local_addr();
 
             local_addrs.push(local_addr);

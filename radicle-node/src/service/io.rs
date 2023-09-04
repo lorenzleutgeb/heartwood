@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::net::SocketAddr;
 use std::time;
 
 use log::*;
@@ -17,7 +18,11 @@ pub enum Io {
     /// There are some messages ready to be sent to a peer.
     Write(NodeId, Vec<Message>),
     /// Connect to a peer.
-    Connect(NodeId, Address),
+    Connect {
+        nid: NodeId,
+        local_addr: SocketAddr,
+        remote_addr: Address,
+    },
     /// Disconnect from a peer.
     Disconnect(NodeId, DisconnectReason),
     /// Fetch repository data from a peer.
@@ -46,8 +51,12 @@ pub struct Outbox {
 
 impl Outbox {
     /// Connect to a peer.
-    pub fn connect(&mut self, id: NodeId, addr: Address) {
-        self.io.push_back(Io::Connect(id, addr));
+    pub fn connect(&mut self, nid: NodeId, local_addr: SocketAddr, remote_addr: Address) {
+        self.io.push_back(Io::Connect {
+            nid,
+            local_addr,
+            remote_addr,
+        });
     }
 
     /// Disconnect a peer.

@@ -36,6 +36,8 @@ pub trait Peer<S, G>:
     /// Initialize the peer. This should at minimum initialize the service with the
     /// current time.
     fn init(&mut self);
+    /// Get the peer socket address.
+    fn socket_addr(&self) -> net::SocketAddr;
     /// Get the peer address.
     fn addr(&self) -> Address;
     /// Get the peer id.
@@ -388,7 +390,8 @@ impl<S: WriteStorage + 'static, G: Signer> Simulation<S, G> {
                         let attempted = link.is_outbound() && self.attempts.remove(&conn);
                         if attempted || link.is_inbound() {
                             if self.connections.insert(conn) {
-                                p.connected(id, addr, link);
+                                let local_addr = p.socket_addr();
+                                p.connected(id, local_addr, addr, link);
                             }
                         }
                     }
@@ -495,7 +498,11 @@ impl<S: WriteStorage + 'static, G: Signer> Simulation<S, G> {
                     },
                 );
             }
-            Io::Connect(remote, addr) => {
+            Io::Connect {
+                nid: remote,
+                remote_addr: addr,
+                ..
+            } => {
                 assert!(remote != node, "self-connections are not allowed");
 
                 self.inbox.insert(

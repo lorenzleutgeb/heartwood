@@ -8,6 +8,7 @@ pub mod tracking;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{BufRead, BufReader};
+use std::net::SocketAddr;
 use std::ops::Deref;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -81,6 +82,7 @@ pub enum State {
     Connected {
         /// Connected since this time.
         since: LocalTime,
+        local_addr: SocketAddr,
         // Node address
         addr: Address,
         /// Ping state.

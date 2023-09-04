@@ -4,6 +4,7 @@
 //! The handshake itself is implemented in the external [`cyphernet`] and [`netservices`] crates.
 use std::collections::hash_map::Entry;
 use std::collections::VecDeque;
+use std::net::SocketAddr;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::prelude::RawFd;
 use std::sync::Arc;
@@ -17,7 +18,7 @@ use cyphernet::proxy::socks5;
 use cyphernet::{Digest, EcSk, Ecdh, Sha256};
 use localtime::LocalTime;
 use netservices::resource::{ListenerEvent, NetAccept, NetTransport, SessionEvent};
-use netservices::session::{ProtocolArtifact, Socks5Session};
+use netservices::session::{NetSession, ProtocolArtifact, Socks5Session};
 use netservices::{NetConnection, NetProtocol, NetReader, NetWriter};
 use reactor::Timestamp;
 
@@ -141,9 +142,13 @@ impl Streams {
 /// Peer connection state machine.
 enum Peer {
     /// The initial state of an inbound peer before handshake is completed.
-    Inbound { addr: NetAddr<HostName> },
+    Inbound {
+        local_addr: SocketAddr,
+        addr: NetAddr<HostName>,
+    },
     /// The initial state of an outbound peer before handshake is completed.
     Outbound {
+        local_addr: SocketAddr,
         addr: NetAddr<HostName>,
         nid: NodeId,
     },
@@ -168,7 +173,7 @@ enum Peer {
 impl std::fmt::Debug for Peer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Inbound { addr } => write!(f, "Inbound({addr})"),
+            Self::Inbound { addr, .. } => write!(f, "Inbound({addr})"),
             Self::Outbound { nid, .. } => write!(f, "Outbound({nid})"),
             Self::Connected { link, nid, .. } => write!(f, "Connected({link:?}, {nid})"),
             Self::Disconnecting { .. } => write!(f, "Disconnecting"),
@@ -189,19 +194,24 @@ impl Peer {
     }
 
     /// Return a new inbound connecting peer.
-    fn inbound(addr: NetAddr<HostName>) -> Self {
-        Self::Inbound { addr }
+    fn inbound(local_addr: SocketAddr, addr: NetAddr<HostName>) -> Self {
+        Self::Inbound { local_addr, addr }
     }
 
     /// Return a new outbound connecting peer.
-    fn outbound(addr: NetAddr<HostName>, nid: NodeId) -> Self {
-        Self::Outbound { addr, nid }
+    fn outbound(local_addr: SocketAddr, addr: NetAddr<HostName>, nid: NodeId) -> Self {
+        Self::Outbound {
+            local_addr,
+            addr,
+            nid,
+        }
     }
 
     /// Switch to connected state.
-    fn connected(&mut self, nid: NodeId) -> (NetAddr<HostName>, Link) {
-        if let Self::Inbound { addr } = self {
+    fn connected(&mut self, nid: NodeId) -> (SocketAddr, NetAddr<HostName>, Link) {
+        if let Self::Inbound { local_addr, addr } = self {
             let link = Link::Inbound;
+            let local_addr = *local_addr;
             let addr = addr.clone();
 
             *self = Self::Connected {
@@ -211,8 +221,9 @@ impl Peer {
                 inbox: Deserializer::default(),
                 streams: Streams::new(link),
             };
-            (addr, link)
+            (local_addr, addr, link)
         } else if let Self::Outbound {
+            local_addr,
             addr,
             nid: expected,
         } = self
@@ -220,6 +231,7 @@ impl Peer {
             assert_eq!(nid, *expected);
 
             let link = Link::Outbound;
+            let local_addr = *local_addr;
             let addr = addr.clone();
 
             *self = Self::Connected {
@@ -229,7 +241,7 @@ impl Peer {
                 inbox: Deserializer::default(),
                 streams: Streams::new(link),
             };
-            (addr, link)
+            (local_addr, addr, link)
         } else {
             panic!("Peer::connected: session for {nid} is already established");
         }
@@ -472,16 +484,24 @@ where
     ) {
         match event {
             ListenerEvent::Accepted(connection) => {
+                let fd = connection.as_raw_fd();
+                let local_addr = match connection.local_addr() {
+                    Ok(local_addr) => local_addr,
+                    Err(err) => {
+                        log::debug!(target: "wire", "disconnected from incoming connection: {err}");
+                        return;
+                    }
+                };
                 let addr = connection.remote_addr();
-                log::debug!(target: "wire", "Accepting inbound peer connection from {addr}..");
+                log::debug!(target: "wire", "Accepting inbound peer connection from {addr} (fd={fd})..");
 
                 self.peers
-                    .insert(connection.as_raw_fd(), Peer::inbound(addr.clone().into()));
+                    .insert(fd, Peer::inbound(local_addr, addr.clone().into()));
 
                 // If the service doesn't want to accept this connection,
                 // we drop the connection here, which disconnects the socket.
                 if !self.service.accepted(NetAddr::from(addr.clone()).into()) {
-                    log::debug!(target: "wire", "Dropping inbound connection from {addr}..");
+                    log::debug!(target: "wire", "Dropping inbound connection from {addr} (fd={fd})..");
                     drop(connection);
 
                     return;
@@ -540,9 +560,9 @@ where
                     log::error!(target: "wire", "Session not found for fd {fd}");
                     return;
                 };
-                let (addr, link) = peer.connected(id);
+                let (local_addr, addr, link) = peer.connected(id);
 
-                self.service.connected(id, addr.into(), link);
+                self.service.connected(id, local_addr, addr.into(), link);
             }
             SessionEvent::Data(data) => {
                 if let Some(Peer::Connected {
@@ -774,7 +794,11 @@ where
                     }
                     self.actions.push_back(reactor::Action::Send(fd, data));
                 }
-                Io::Connect(node_id, addr) => {
+                Io::Connect {
+                    nid: node_id,
+                    local_addr,
+                    remote_addr: addr,
+                } => {
                     if self.peers.connected().any(|(_, id)| id == &node_id) {
                         log::error!(
                             target: "wire",
@@ -784,6 +808,7 @@ where
                     }
 
                     match dial::<G>(
+                        local_addr,
                         addr.to_inner(),
                         node_id,
                         self.signer.clone(),
@@ -791,16 +816,22 @@ where
                         false,
                     )
                     .and_then(|session| {
-                        NetTransport::<WireSession<G>>::with_session(session, Link::Outbound)
+                        let local_addr = NetSession::as_connection(&session).local_addr()?;
+                        let transport =
+                            NetTransport::<WireSession<G>>::with_session(session, Link::Outbound)?;
+                        Ok((transport, local_addr))
                     }) {
-                        Ok(transport) => {
+                        Ok((transport, local_addr)) => {
+                            let fd = transport.as_raw_fd();
+                            log::debug!(
+                                "Initiated outgoing connection to {} (fd={fd})",
+                                addr.to_inner()
+                            );
                             self.service.attempted(node_id, addr.clone());
                             // TODO: Keep track of peer address for when peer disconnects before
                             // handshake is complete.
-                            self.peers.insert(
-                                transport.as_raw_fd(),
-                                Peer::outbound(addr.to_inner(), node_id),
-                            );
+                            self.peers
+                                .insert(fd, Peer::outbound(local_addr, addr.to_inner(), node_id));
 
                             self.actions
                                 .push_back(reactor::Action::RegisterTransport(transport));
@@ -880,6 +911,7 @@ where
 
 /// Establish a new outgoing connection.
 pub fn dial<G: Signer + Ecdh<Pk = NodeId>>(
+    local_addr: SocketAddr,
     remote_addr: NetAddr<HostName>,
     remote_id: <G as EcSk>::Pk,
     signer: G,
@@ -887,9 +919,12 @@ pub fn dial<G: Signer + Ecdh<Pk = NodeId>>(
     force_proxy: bool,
 ) -> io::Result<WireSession<G>> {
     let connection = if force_proxy {
-        net::TcpStream::connect_nonblocking(proxy_addr)?
+        net::TcpStream::connect_reusable_nonblocking(local_addr.into(), proxy_addr)?
     } else {
-        net::TcpStream::connect_nonblocking(remote_addr.connection_addr(proxy_addr))?
+        net::TcpStream::connect_reusable_nonblocking(
+            local_addr.into(),
+            remote_addr.connection_addr(proxy_addr),
+        )?
     };
     Ok(session::<G>(
         remote_addr,

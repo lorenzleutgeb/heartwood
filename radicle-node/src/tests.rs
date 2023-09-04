@@ -135,8 +135,8 @@ fn test_redundant_connect() {
     // Only one connection attempt is made.
     assert_matches!(
         alice.outbox().collect::<Vec<_>>().as_slice(),
-        [Io::Connect(id, addr)]
-        if *id == bob.id() && *addr == bob.addr()
+        [Io::Connect { nid, remote_addr, .. }]
+        if *nid == bob.id() && *remote_addr == bob.addr()
     );
 }
 
@@ -241,11 +241,11 @@ fn test_persistent_peer_connect() {
     let outbox = alice.outbox().collect::<Vec<_>>();
     outbox
         .iter()
-        .find(|o| matches!(o, Io::Connect(a, _) if *a == bob.id()))
+        .find(|o| matches!(o, Io::Connect { nid, .. } if *nid == bob.id()))
         .unwrap();
     outbox
         .iter()
-        .find(|o| matches!(o, Io::Connect(a, _) if *a == eve.id()))
+        .find(|o| matches!(o, Io::Connect { nid, .. } if *nid == eve.id()))
         .unwrap();
 }
 
@@ -979,7 +979,7 @@ fn test_persistent_peer_reconnect_attempt() {
         alice.elapse(service::MAX_RECONNECTION_DELTA);
         alice
             .outbox()
-            .find(|io| matches!(io, Io::Connect(a, _) if a == &bob.id()))
+            .find(|io| matches!(io, Io::Connect { nid, .. } if nid == &bob.id()))
             .unwrap();
 
         alice.attempted(bob.id(), bob.address());
@@ -1019,13 +1019,14 @@ fn test_persistent_peer_reconnect_success() {
     alice
         .outbox()
         .find_map(|o| match o {
-            Io::Connect(id, _) => Some(id),
+            Io::Connect { nid, .. } => Some(nid),
             _ => None,
         })
         .expect("Alice attempts a re-connection");
 
     alice.attempted(bob.id(), bob.addr());
-    alice.connected(bob.id(), bob.addr(), Link::Outbound);
+    let alice_addr = alice.socket_addr();
+    alice.connected(bob.id(), alice_addr, bob.addr(), Link::Outbound);
 }
 
 #[test]
@@ -1064,7 +1065,7 @@ fn test_maintain_connections() {
         let id = alice
             .outbox()
             .find_map(|o| match o {
-                Io::Connect(id, _) => Some(id),
+                Io::Connect { nid, .. } => Some(nid),
                 _ => None,
             })
             .expect("Alice connects to a new peer");
@@ -1089,27 +1090,27 @@ fn test_maintain_connections_failed_attempt() {
     alice.disconnected(bob.id(), &DisconnectReason::Command);
     alice
         .outbox()
-        .find(|o| matches!(o, Io::Connect(id, _) if id == &eve.id))
+        .find(|o| matches!(o, Io::Connect { nid, .. } if nid == &eve.id))
         .expect("Alice attempts Eve");
     alice.attempted(eve.id, eve.addr());
 
     // Disconnect Eve and make sure Alice doesn't try to re-connect immediately.
     alice.disconnected(eve.id(), &DisconnectReason::Command);
-    assert!(!alice.outbox().any(|o| matches!(o, Io::Connect(_, _))));
+    assert!(!alice.outbox().any(|o| matches!(o, Io::Connect { .. })));
 
     // Now pass some time and try again.
     alice.elapse(MAX_RECONNECTION_DELTA);
     alice
         .outbox()
-        .find(|o| matches!(o, Io::Connect(id, _) if id == &eve.id))
+        .find(|o| matches!(o, Io::Connect { nid, .. } if nid == &eve.id))
         .expect("Alice attempts Eve again");
 
     // Disconnect Eve and make sure Alice doesn't try to re-connect immediately.
     alice.disconnected(eve.id(), &DisconnectReason::Command);
-    assert!(!alice.outbox().any(|o| matches!(o, Io::Connect(_, _))));
+    assert!(!alice.outbox().any(|o| matches!(o, Io::Connect { .. })));
     // Or even after some short time..
     alice.elapse(MIN_RECONNECTION_DELTA);
-    assert!(!alice.outbox().any(|o| matches!(o, Io::Connect(_, _))));
+    assert!(!alice.outbox().any(|o| matches!(o, Io::Connect { .. })));
 }
 
 #[test]

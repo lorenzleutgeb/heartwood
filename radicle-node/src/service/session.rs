@@ -1,5 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
+use std::net::SocketAddr;
 
 use crate::node::config::Limits;
 use crate::service::message;
@@ -119,6 +120,7 @@ impl Session {
     pub fn inbound(
         id: NodeId,
         addr: Address,
+        local_addr: SocketAddr,
         persistent: bool,
         rng: Rng,
         time: LocalTime,
@@ -128,6 +130,7 @@ impl Session {
             id,
             state: State::Connected {
                 since: time,
+                local_addr,
                 addr,
                 ping: PingState::default(),
                 fetching: HashSet::default(),
@@ -202,7 +205,7 @@ impl Session {
         self.attempts += 1;
     }
 
-    pub fn to_connected(&mut self, since: LocalTime) {
+    pub fn to_connected(&mut self, since: LocalTime, local_addr: SocketAddr) {
         self.attempts = 0;
 
         let State::Attempted { addr } = &self.state else {
@@ -210,6 +213,7 @@ impl Session {
         };
         self.state = State::Connected {
             since,
+            local_addr,
             addr: addr.clone(),
             ping: PingState::default(),
             fetching: HashSet::default(),

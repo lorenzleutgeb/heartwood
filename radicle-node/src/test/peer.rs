@@ -59,6 +59,10 @@ where
         self.initialize()
     }
 
+    fn socket_addr(&self) -> net::SocketAddr {
+        self.socket_addr()
+    }
+
     fn addr(&self) -> Address {
         self.address()
     }
@@ -215,8 +219,12 @@ where
         }
     }
 
+    pub fn socket_addr(&self) -> net::SocketAddr {
+        net::SocketAddr::from((self.ip, 8776))
+    }
+
     pub fn address(&self) -> Address {
-        Address::from(net::SocketAddr::from((self.ip, 8776)))
+        Address::from(self.socket_addr())
     }
 
     pub fn import_addresses<'a>(&mut self, peers: impl IntoIterator<Item = &'a Self>) {
@@ -323,7 +331,7 @@ where
 
         self.initialize();
         self.service
-            .connected(remote_id, peer.address(), Link::Inbound);
+            .connected(remote_id, self.socket_addr(), peer.address(), Link::Inbound);
 
         let mut msgs = self.messages(remote_id);
         msgs.find(|m| {
@@ -357,7 +365,7 @@ where
 
         self.service.attempted(remote_id, remote_addr.clone());
         self.service
-            .connected(remote_id, remote_addr, Link::Outbound);
+            .connected(remote_id, self.socket_addr(), remote_addr, Link::Outbound);
 
         let mut msgs = self.messages(remote_id);
         msgs.find(|m| {
