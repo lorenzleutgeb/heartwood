@@ -73,6 +73,12 @@ pub enum PingState {
 pub enum State {
     /// Initial state for outgoing connections.
     Initial,
+    /// Waiting for a response from a rendezvous node.
+    WaitingForRendezvousResponse {
+        rendezvous_nid: NodeId,
+        failed_rendezvous_nids: HashSet<NodeId>,
+    },
+    HolePunching,
     /// Connection attempted successfully.
     Attempted {
         // Node address
@@ -113,8 +119,14 @@ impl fmt::Display for State {
             Self::Initial => {
                 write!(f, "initial")
             }
+            Self::HolePunching => {
+                write!(f, "hole punching")
+            }
             Self::Attempted { .. } => {
                 write!(f, "attempted")
+            }
+            Self::WaitingForRendezvousResponse { .. } => {
+                write!(f, "waiting for rendezvous response")
             }
             Self::Connected { .. } => {
                 write!(f, "connected")
@@ -300,6 +312,13 @@ impl Address {
         match self.0.host {
             HostName::Ip(ip) => address::is_routable(&ip),
             _ => true,
+        }
+    }
+
+    pub fn try_to_socket_addr(&self) -> Option<net::SocketAddr> {
+        match self.0.host {
+            HostName::Ip(ip) => Some(net::SocketAddr::from((ip, self.0.port))),
+            _ => None,
         }
     }
 }

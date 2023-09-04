@@ -1,4 +1,4 @@
-use std::{fmt, io, mem};
+use std::{fmt, io, mem, net::SocketAddr};
 
 use radicle::storage::refs::RefsAt;
 
@@ -355,6 +355,23 @@ impl Announcement {
     }
 }
 
+#[derive(PartialEq, Eq, Clone)]
+pub struct RendezvousRequest {
+    pub nid: NodeId,
+}
+
+#[derive(PartialEq, Eq, Clone)]
+pub struct RendezvousResponse {
+    pub nid: NodeId,
+    pub addr_opt: Option<SocketAddr>,
+}
+
+#[derive(PartialEq, Eq, Clone)]
+pub struct HolePunchRequest {
+    pub nid: NodeId,
+    pub addr: SocketAddr,
+}
+
 /// Message payload.
 /// These are the messages peers send to each other.
 #[derive(Clone, PartialEq, Eq)]
@@ -365,6 +382,10 @@ pub enum Message {
     /// Gossip announcement. These messages are relayed to peers, and filtered
     /// using [`Message::Subscribe`].
     Announcement(Announcement),
+
+    RendezvousRequest(RendezvousRequest),
+    RendezvousResponse(RendezvousResponse),
+    HolePunchRequest(HolePunchRequest),
 
     /// Ask a connected peer for a Pong.
     ///
@@ -455,8 +476,32 @@ impl Message {
             Self::Subscribe(Subscribe { .. }) => {
                 format!("{verb} subscription filter {prep} {remote}")
             }
+            Self::RendezvousRequest(RendezvousRequest { nid }) => {
+                format!("{verb} rendezvous request for {nid} {prep} {remote}")
+            }
+            Self::RendezvousResponse(RendezvousResponse { nid, addr_opt }) => {
+                match addr_opt {
+                    Some(addr) => format!("{verb} rendezvous response for {nid} at {addr} {prep} {remote}"),
+                    None => format!("{verb} failed rendezvous response for {nid} {prep} {remote}"),
+                }
+            }
+            Self::HolePunchRequest(HolePunchRequest { nid, addr }) => {
+                format!("{verb} hole punch request for {nid} at {addr} {prep} {remote}")
+            },
         };
         log::log!(target: "service", level, "{msg}");
+    }
+
+    pub fn rendezvous_request(nid: NodeId) -> Message {
+        Message::RendezvousRequest(RendezvousRequest { nid })
+    }
+
+    pub fn rendezvous_response(nid: NodeId, addr_opt: Option<SocketAddr>) -> Message {
+        Message::RendezvousResponse(RendezvousResponse { nid, addr_opt })
+    }
+
+    pub fn hole_punch_request(nid: NodeId, addr: SocketAddr) -> Message {
+        Message::HolePunchRequest(HolePunchRequest { nid, addr })
     }
 }
 
@@ -504,6 +549,15 @@ impl fmt::Debug for Message {
             }
             Self::Announcement(Announcement { node, message, .. }) => {
                 write!(f, "Announcement({node}, {message:?})")
+            }
+            Self::RendezvousRequest(RendezvousRequest { nid }) => {
+                write!(f, "RendezvousRequest({nid})")
+            }
+            Self::RendezvousResponse(RendezvousResponse { nid, addr_opt }) => {
+                write!(f, "RendezvousResponse({nid}, {addr_opt:?})")
+            }
+            Self::HolePunchRequest(HolePunchRequest { nid, addr }) => {
+                write!(f, "HolePunchRequest({nid}, {addr})")
             }
             Self::Ping(Ping { ponglen, zeroes }) => write!(f, "Ping({ponglen}, {zeroes:?})"),
             Self::Pong { zeroes } => write!(f, "Pong({zeroes:?})"),

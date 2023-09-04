@@ -60,6 +60,8 @@ pub enum Error {
     UnknownAddressType(u8),
     #[error("invalid address type `{0:?}`")]
     InvalidAddressType(AddressType),
+    #[error("invalid optional field `{0}`")]
+    InvalidOptionalField(u8),
     #[error("unknown message type `{0}`")]
     UnknownMessageType(u16),
     #[error("unexpected bytes")]

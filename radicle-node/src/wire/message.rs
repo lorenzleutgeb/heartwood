@@ -19,6 +19,9 @@ pub enum MessageType {
     Subscribe = 8,
     Ping = 10,
     Pong = 12,
+    RendezvousRequest = 14,
+    RendezvousResponse = 16,
+    HolePunchRequest = 18,
 }
 
 impl From<MessageType> for u16 {
@@ -38,6 +41,9 @@ impl TryFrom<u16> for MessageType {
             8 => Ok(MessageType::Subscribe),
             10 => Ok(MessageType::Ping),
             12 => Ok(MessageType::Pong),
+            14 => Ok(MessageType::RendezvousRequest),
+            16 => Ok(MessageType::RendezvousResponse),
+            18 => Ok(MessageType::HolePunchRequest),
             _ => Err(other),
         }
     }
@@ -56,6 +62,9 @@ impl Message {
                 AnnouncementMessage::Inventory(_) => MessageType::InventoryAnnouncement,
                 AnnouncementMessage::Refs(_) => MessageType::RefsAnnouncement,
             },
+            Self::RendezvousRequest(..) => MessageType::RendezvousRequest,
+            Self::RendezvousResponse(..) => MessageType::RendezvousResponse,
+            Self::HolePunchRequest(..) => MessageType::HolePunchRequest,
             Self::Ping { .. } => MessageType::Ping,
             Self::Pong { .. } => MessageType::Pong,
         }
@@ -203,6 +212,17 @@ impl wire::Encode for Message {
                 n += message.encode(writer)?;
                 n += signature.encode(writer)?;
             }
+            Self::RendezvousRequest(RendezvousRequest { nid }) => {
+                n += nid.encode(writer)?;
+            }
+            Self::RendezvousResponse(RendezvousResponse { nid, addr_opt }) => {
+                n += nid.encode(writer)?;
+                n += addr_opt.encode(writer)?;
+            }
+            Self::HolePunchRequest(HolePunchRequest { nid, addr }) => {
+                n += nid.encode(writer)?;
+                n += addr.encode(writer)?;
+            }
             Self::Ping(Ping { ponglen, zeroes }) => {
                 n += ponglen.encode(writer)?;
                 n += zeroes.encode(writer)?;
@@ -273,6 +293,23 @@ impl wire::Decode for Message {
                     signature,
                 }
                 .into())
+            }
+            Ok(MessageType::RendezvousRequest) => {
+                let nid = NodeId::decode(reader)?;
+                Ok(Self::RendezvousRequest(RendezvousRequest { nid }))
+            }
+            Ok(MessageType::RendezvousResponse) => {
+                let nid = NodeId::decode(reader)?;
+                let addr_opt = Option::decode(reader)?;
+                Ok(Self::RendezvousResponse(RendezvousResponse {
+                    nid,
+                    addr_opt,
+                }))
+            }
+            Ok(MessageType::HolePunchRequest) => {
+                let nid = NodeId::decode(reader)?;
+                let addr = net::SocketAddr::decode(reader)?;
+                Ok(Self::HolePunchRequest(HolePunchRequest { nid, addr }))
             }
             Ok(MessageType::Ping) => {
                 let ponglen = u16::decode(reader)?;
@@ -362,6 +399,42 @@ impl wire::Decode for ZeroBytes {
             _ = u8::decode(reader)?;
         }
         Ok(ZeroBytes::new(zeroes))
+    }
+}
+
+impl<T> wire::Encode for Option<T>
+where
+    T: wire::Encode,
+{
+    fn encode<W: io::Write + ?Sized>(&self, writer: &mut W) -> Result<usize, io::Error> {
+        let mut n = 0;
+        match self {
+            None => {
+                n += 0u8.encode(writer)?;
+            }
+            Some(val) => {
+                n += 1u8.encode(writer)?;
+                n += val.encode(writer)?;
+            }
+        }
+        Ok(n)
+    }
+}
+
+impl<T> wire::Decode for Option<T>
+where
+    T: wire::Decode,
+{
+    fn decode<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<Self, wire::Error> {
+        let tag = reader.read_u8()?;
+        match tag {
+            0u8 => Ok(None),
+            1u8 => {
+                let val = wire::Decode::decode(reader)?;
+                Ok(Some(val))
+            }
+            other => Err(wire::Error::InvalidOptionalField(other)),
+        }
     }
 }
 

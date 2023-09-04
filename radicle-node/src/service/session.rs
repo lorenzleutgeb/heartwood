@@ -117,6 +117,45 @@ impl Session {
         }
     }
 
+    pub fn hole_punching(id: NodeId, persistent: bool, rng: Rng, limits: Limits) -> Self {
+        Self {
+            id,
+            state: State::HolePunching,
+            link: Link::Inbound,
+            subscribe: None,
+            persistent,
+            last_active: LocalTime::default(),
+            queue: VecDeque::default(),
+            attempts: 1,
+            rng,
+            limits,
+        }
+    }
+
+    pub fn waiting_for_rendezvous_response(
+        nid: NodeId,
+        persistent: bool,
+        rng: Rng,
+        limits: Limits,
+        rendezvous_nid: NodeId,
+    ) -> Self {
+        Self {
+            id: nid,
+            state: State::WaitingForRendezvousResponse {
+                rendezvous_nid,
+                failed_rendezvous_nids: HashSet::new(),
+            },
+            link: Link::Outbound,
+            subscribe: None,
+            persistent,
+            last_active: LocalTime::default(),
+            queue: VecDeque::default(),
+            attempts: 1,
+            rng,
+            limits,
+        }
+    }
+
     pub fn inbound(
         id: NodeId,
         addr: Address,
@@ -198,8 +237,8 @@ impl Session {
 
     pub fn to_attempted(&mut self, addr: Address) {
         assert!(
-            self.is_initial(),
-            "Can only transition to 'attempted' state from 'initial' state"
+            matches!(&self.state, State::Initial | State::HolePunching),
+            "Can only transition to 'attempted' state from 'initial' or 'hole_punching' state"
         );
         self.state = State::Attempted { addr };
         self.attempts += 1;
@@ -234,6 +273,15 @@ impl Session {
             "Can only transition to 'initial' state from 'disconnected' state"
         );
         self.state = State::Initial;
+    }
+
+    pub fn to_hole_punching(&mut self) {
+        match self.state {
+            State::Initial => (),
+            State::WaitingForRendezvousResponse { .. } => (),
+            _ => panic!("Can only transition to 'hole-punching' state from 'initial' or 'waiting for rendezvous response states'"),
+        };
+        self.state = State::HolePunching;
     }
 
     pub fn fetching(&self) -> HashSet<Id> {

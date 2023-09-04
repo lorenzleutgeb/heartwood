@@ -6,8 +6,8 @@ use crate::node::Alias;
 use crate::prelude::{BoundedVec, Id, NodeId, Timestamp};
 use crate::service::filter::{Filter, FILTER_SIZE_L, FILTER_SIZE_M, FILTER_SIZE_S};
 use crate::service::message::{
-    Announcement, InventoryAnnouncement, Message, NodeAnnouncement, Ping, RefsAnnouncement,
-    Subscribe, ZeroBytes,
+    Announcement, HolePunchRequest, InventoryAnnouncement, Message, NodeAnnouncement, Ping,
+    RefsAnnouncement, RendezvousRequest, RendezvousResponse, Subscribe, ZeroBytes,
 };
 use crate::wire::MessageType;
 
@@ -86,6 +86,17 @@ impl Arbitrary for Message {
                 filter: Filter::arbitrary(g),
                 since: Timestamp::arbitrary(g),
                 until: Timestamp::arbitrary(g),
+            }),
+            MessageType::RendezvousRequest => Self::RendezvousRequest(RendezvousRequest {
+                nid: NodeId::arbitrary(g),
+            }),
+            MessageType::RendezvousResponse => Self::RendezvousResponse(RendezvousResponse {
+                nid: NodeId::arbitrary(g),
+                addr_opt: Option::arbitrary(g),
+            }),
+            MessageType::HolePunchRequest => Self::HolePunchRequest(HolePunchRequest {
+                nid: NodeId::arbitrary(g),
+                addr: std::net::SocketAddr::arbitrary(g),
             }),
             MessageType::Ping => {
                 let mut rng = fastrand::Rng::with_seed(u64::arbitrary(g));

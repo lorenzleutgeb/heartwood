@@ -36,7 +36,10 @@ use crate::node::routing::InsertResult;
 use crate::node::{Address, Alias, Features, FetchResult, HostName, Seed, Seeds};
 use crate::prelude::*;
 use crate::runtime::Emitter;
-use crate::service::message::{Announcement, AnnouncementMessage, Ping};
+use crate::service::message::{
+    Announcement, AnnouncementMessage, HolePunchRequest, Ping, RendezvousRequest,
+    RendezvousResponse,
+};
 use crate::service::message::{NodeAnnouncement, RefsAnnouncement};
 use crate::service::tracking::{store::Write, Scope};
 use crate::storage;
@@ -240,6 +243,8 @@ pub struct Service<R, A, S, G> {
     start_time: LocalTime,
     /// Publishes events to subscribers.
     emitter: Emitter<Event>,
+    /// Rendezvous requests to send upon connecting to a peer.
+    pending_outgoing_rendezvous_requests: HashMap<NodeId, HashSet<NodeId>>,
 }
 
 impl<R, A, S, G> Service<R, A, S, G>
@@ -301,6 +306,7 @@ where
             last_announce: LocalTime::default(),
             start_time: LocalTime::default(),
             emitter,
+            pending_outgoing_rendezvous_requests: HashMap::default(),
         }
     }
 
@@ -837,6 +843,13 @@ where
             }
         };
         self.outbox.write_all(peer, msgs);
+        if let Some(target_nids) = self.pending_outgoing_rendezvous_requests.remove(&remote) {
+            let msgs: Vec<_> = target_nids
+                .into_iter()
+                .map(|target_nid| Message::rendezvous_request(target_nid))
+                .collect();
+            self.outbox.write_all(peer, msgs);
+        }
     }
 
     pub fn disconnected(&mut self, remote: NodeId, reason: &DisconnectReason) {
@@ -1175,8 +1188,11 @@ where
             Link::Inbound => &self.config.limits.rate.inbound,
         };
 
-        let (addr, ping) = match &mut peer.state {
-            session::State::Attempted { .. } | session::State::Initial { .. } => {
+        let (addr, ping, local_addr) = match &mut peer.state {
+            session::State::Attempted { .. }
+            | session::State::Initial { .. }
+            | session::State::WaitingForRendezvousResponse { .. }
+            | session::State::HolePunching => {
                 error!(target: "service", "Received {:?} from connecting peer {}", message, peer.id);
                 return Ok(());
             }
@@ -1184,7 +1200,12 @@ where
                 debug!(target: "service", "Ignoring {:?} from disconnected peer {}", message, peer.id);
                 return Ok(());
             }
-            session::State::Connected { addr, ping, .. } => (addr, ping),
+            session::State::Connected {
+                addr,
+                ping,
+                local_addr,
+                ..
+            } => (addr, ping, *local_addr),
         };
 
         if self.limiter.limit(addr.clone().into(), limit, self.clock) {
@@ -1246,6 +1267,59 @@ where
                     }
                 }
                 peer.subscribe = Some(subscribe);
+            }
+            Message::RendezvousRequest(rendezvous_request) => {
+                let RendezvousRequest { nid } = rendezvous_request;
+                let target_addr_opt = match addr.try_to_socket_addr() {
+                    None => None,
+                    Some(remote_addr) => match self.sessions.get(&nid) {
+                        None => None,
+                        Some(target_session) => match &target_session.state {
+                            session::State::Connected {
+                                addr: target_addr, ..
+                            } => match target_addr.try_to_socket_addr() {
+                                Some(target_addr) => {
+                                    self.outbox.write(
+                                        target_session,
+                                        Message::hole_punch_request(*remote, remote_addr),
+                                    );
+                                    Some(target_addr)
+                                }
+                                None => None,
+                            },
+                            _ => None,
+                        },
+                    },
+                };
+                let peer = self.sessions.get_mut(remote).unwrap();
+                self.outbox
+                    .write(peer, Message::rendezvous_response(nid, target_addr_opt));
+            }
+            Message::RendezvousResponse(RendezvousResponse { nid, addr_opt }) => {
+                let expected = match self.sessions.get(&nid) {
+                    Some(session) => match &session.state {
+                        session::State::WaitingForRendezvousResponse { rendezvous_nid, .. } => {
+                            rendezvous_nid == remote
+                        }
+                        _ => false,
+                    },
+                    _ => false,
+                };
+                if !expected {
+                    log::info!(target: "service", "received unexpected rendezvous response");
+                    return Ok(());
+                };
+                match addr_opt {
+                    None => {
+                        self.rendezvous_connect(nid);
+                    }
+                    Some(addr) => {
+                        self.hole_punch(nid, local_addr, addr.into());
+                    }
+                }
+            }
+            Message::HolePunchRequest(HolePunchRequest { nid, addr }) => {
+                self.hole_punch(nid, local_addr, addr.into());
             }
             Message::Ping(Ping { ponglen, .. }) => {
                 // Ignore pings which ask for too much data.
@@ -1477,11 +1551,40 @@ where
                 }
             }
         });
-        let Some(addr) = addr_opt else {
-            warn!(target: "service", "reconnecting without an address is not implemented");
-            return false;
-        };
-        self.connect_with_addr(node_id, addr)
+        match addr_opt {
+            Some(addr) => self.connect_with_addr(node_id, addr),
+            None => self.rendezvous_connect(node_id),
+        }
+    }
+
+    fn hole_punch(&mut self, nid: NodeId, local_addr: SocketAddr, remote_addr: Address) {
+        println!(
+            "calling hole_punch: {}, {}, {}",
+            nid, local_addr, remote_addr
+        );
+        match self.sessions.entry(nid) {
+            Entry::Occupied(entry) => {
+                let session = entry.into_mut();
+                match &session.state {
+                    session::State::WaitingForRendezvousResponse { .. } => (),
+                    _ => {
+                        log::info!(target: "service", "hole_punch called for session not waiting for rendezvous response");
+                        return;
+                    }
+                }
+                session.to_hole_punching();
+            }
+            Entry::Vacant(entry) => {
+                let persistent = self.config.is_persistent(&nid);
+                entry.insert(Session::hole_punching(
+                    nid,
+                    persistent,
+                    self.rng.clone(),
+                    self.config.limits.clone(),
+                ));
+            }
+        }
+        self.outbox.connect(nid, local_addr, remote_addr);
     }
 
     fn connect_with_addr(&mut self, nid: NodeId, addr: Address) -> bool {
@@ -1510,6 +1613,151 @@ where
         self.outbox
             .connect(nid, (Ipv4Addr::UNSPECIFIED, 0).into(), addr);
 
+        true
+    }
+
+    fn rendezvous_connect(&mut self, nid: NodeId) -> bool {
+        println!("calling rendezvous_connect to {}", nid);
+        let failed_rendezvous_nids = match self.sessions.get_mut(&nid) {
+            None => HashSet::new(),
+            Some(session) => match &mut session.state {
+                session::State::WaitingForRendezvousResponse {
+                    rendezvous_nid,
+                    failed_rendezvous_nids,
+                } => {
+                    let mut failed_rendezvous_nids = std::mem::take(failed_rendezvous_nids);
+                    failed_rendezvous_nids.insert(*rendezvous_nid);
+                    failed_rendezvous_nids
+                }
+                _ => {
+                    log::info!(target: "service", "Unexpected call to rendezvous_connect");
+                    return false;
+                }
+            },
+        };
+        println!(
+            "there are {} failed rendezvous nids",
+            failed_rendezvous_nids.len()
+        );
+        let node_addr_info_opt = match self.addresses.get(&nid) {
+            Ok(node_addr_info_opt) => node_addr_info_opt,
+            Err(err) => {
+                log::error!(target: "service", "error reading address book: {}", err);
+                return false;
+            }
+        };
+        let mut rendezvous_nids = {
+            node_addr_info_opt
+                .as_ref()
+                .map(|node_addr_info| {
+                    println!(
+                        "we have the addr info for the destination: {:#?}",
+                        node_addr_info
+                    );
+                    node_addr_info
+                        .relays
+                        .iter()
+                        .map(|known_relay| &known_relay.relay_node_id)
+                })
+                .into_iter()
+                .flatten()
+                .cloned()
+        };
+        let new_rendezvous_nid = loop {
+            let new_rendezvous_nid = match rendezvous_nids.next() {
+                None => {
+                    if self.sessions.get(&nid).is_some() {
+                        self.disconnected(nid, &DisconnectReason::NoRendezvousServers);
+                    }
+                    log::debug!(target: "service", "No remaining rendezvous nodes to connect to {nid}");
+                    return false;
+                }
+                Some(new_rendezvous_nid) => new_rendezvous_nid,
+            };
+            println!("considering rendezvous nid {}", new_rendezvous_nid);
+            if failed_rendezvous_nids.contains(&new_rendezvous_nid) {
+                println!("that rendezvous nid failed earlier. skipping.");
+                continue;
+            }
+            if let Some(rendezvous_session) = self.sessions.get(&new_rendezvous_nid) {
+                match &rendezvous_session.state {
+                    session::State::Connected { .. } => {
+                        println!("we are connected to the rendezvous nid. sending them a request");
+                        let msg = Message::rendezvous_request(nid);
+                        self.outbox.write(rendezvous_session, msg);
+                        break new_rendezvous_nid;
+                    }
+                    session::State::Disconnected { .. } => (),
+                    session::State::Initial { .. }
+                    | session::State::WaitingForRendezvousResponse { .. }
+                    | session::State::HolePunching { .. }
+                    | session::State::Attempted { .. } => {
+                        self.pending_outgoing_rendezvous_requests
+                            .entry(new_rendezvous_nid.clone())
+                            .or_default()
+                            .insert(nid);
+                        break new_rendezvous_nid;
+                    }
+                }
+            }
+            match self.addresses.get(&new_rendezvous_nid) {
+                Ok(Some(rendezvous_node_addr_info)) => {
+                    println!(
+                        "we have the rendezvous nids addr info: {:#?}",
+                        rendezvous_node_addr_info
+                    );
+                    // TODO: don't just try the first address.
+                    if let Some(known_addr) = rendezvous_node_addr_info.addrs.first() {
+                        let new_rendezvous_addr = known_addr.addr.clone();
+                        println!("new know the rendezvous nids addr: {}", new_rendezvous_addr);
+                        self.outbox.connect(
+                            new_rendezvous_nid.clone(),
+                            (Ipv4Addr::UNSPECIFIED, 0).into(),
+                            new_rendezvous_addr,
+                        );
+                        self.pending_outgoing_rendezvous_requests
+                            .entry(new_rendezvous_nid.clone())
+                            .or_default()
+                            .insert(nid);
+                        break new_rendezvous_nid;
+                    }
+                }
+                Ok(None) => (),
+                Err(err) => {
+                    log::error!(target: "service", "error reading address book: {}", err);
+                    return false;
+                }
+            }
+        };
+
+        let persistent = self.config.is_persistent(&nid);
+        match self.sessions.entry(nid) {
+            Entry::Occupied(entry) => {
+                match &mut entry.into_mut().state {
+                    session::State::WaitingForRendezvousResponse {
+                        rendezvous_nid: state_rendezvous_nid,
+                        failed_rendezvous_nids: state_failed_rendezvous_nids,
+                    } => {
+                        *state_rendezvous_nid = new_rendezvous_nid;
+                        *state_failed_rendezvous_nids = failed_rendezvous_nids;
+                    }
+                    _ => {
+                        // SAFETY: we checked earlier in this method that if we have a session it
+                        // is in the WaitingForRendezvousResponse state
+                        unreachable!()
+                    }
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(Session::waiting_for_rendezvous_response(
+                    nid,
+                    persistent,
+                    self.rng.clone(),
+                    self.config.limits.clone(),
+                    new_rendezvous_nid,
+                ));
+            }
+        }
         true
     }
 
@@ -1799,6 +2047,9 @@ pub enum DisconnectReason {
     Command,
     /// Another connection with the peer exists.
     Conflict,
+    /// Cannot perform hole-punching because there are no rendezvous servers to relay messages to
+    /// the peer.
+    NoRendezvousServers,
 }
 
 impl DisconnectReason {
@@ -1820,6 +2071,7 @@ impl DisconnectReason {
             Self::Fetch(_) => true,
             Self::Session(err) => err.is_transient(),
             Self::Conflict => false,
+            Self::NoRendezvousServers => false,
         }
     }
 }
@@ -1833,6 +2085,7 @@ impl fmt::Display for DisconnectReason {
             Self::Session(err) => write!(f, "{err}"),
             Self::Fetch(err) => write!(f, "fetch: {err}"),
             Self::Conflict => write!(f, "conflict"),
+            Self::NoRendezvousServers => write!(f, "no rendezvous servers"),
         }
     }
 }

@@ -234,9 +234,19 @@ pub fn sessions(node: &Node) -> Result<Option<term::Table<4, term::Label>>, node
                 term::Label::from(term::format::dim("initial")),
                 term::Label::blank(),
             ),
+            node::State::HolePunching => (
+                term::Label::blank(),
+                term::Label::from(term::format::dim("hole punching")),
+                term::Label::blank(),
+            ),
             node::State::Attempted { addr, .. } => (
                 addr.to_string().into(),
                 term::Label::from(term::format::tertiary("attempted")),
+                term::Label::blank(),
+            ),
+            node::State::WaitingForRendezvousResponse { .. } => (
+                term::Label::blank(),
+                term::Label::from(term::format::tertiary("contacting relay")),
                 term::Label::blank(),
             ),
             node::State::Connected { addr, since, .. } => (
