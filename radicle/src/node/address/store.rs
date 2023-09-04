@@ -7,7 +7,7 @@ use sqlite as sql;
 use thiserror::Error;
 
 use crate::node;
-use crate::node::address::{KnownAddress, Source};
+use crate::node::address::{KnownAddress, KnownRelay, Source};
 use crate::node::{Address, Alias, AliasError, AliasStore, NodeId};
 use crate::prelude::Timestamp;
 use crate::sql::transaction;
@@ -94,6 +94,7 @@ impl Store for Book {
             let timestamp = row.read::<i64, _>("timestamp") as Timestamp;
             let pow = row.read::<i64, _>("pow") as u32;
             let mut addrs = Vec::new();
+            let mut relays = Vec::new();
 
             let mut stmt = self
                 .db
@@ -114,12 +115,31 @@ impl Store for Book {
                 });
             }
 
+            let mut stmt = self
+                .db
+                .prepare("SELECT relay_node, source FROM relays WHERE node = ?")?;
+            stmt.bind((1, node))?;
+
+            for row in stmt.into_iter() {
+                let row = row?;
+                let relay_node_id = row.read::<NodeId, _>("relay_node");
+                let source = row.read::<Source, _>("source");
+
+                relays.push(KnownRelay {
+                    relay_node_id,
+                    source,
+                    last_success: None,
+                    last_attempt: None,
+                });
+            }
+
             Ok(Some(types::Node {
                 features,
                 alias,
                 pow,
                 timestamp,
                 addrs,
+                relays,
             }))
         } else {
             Ok(None)
@@ -147,6 +167,7 @@ impl Store for Book {
         pow: u32,
         timestamp: Timestamp,
         addrs: impl IntoIterator<Item = KnownAddress>,
+        relays: impl IntoIterator<Item = KnownRelay>,
     ) -> Result<bool, Error> {
         transaction(&self.db, move |db| {
             let mut stmt = db.prepare(
@@ -177,6 +198,20 @@ impl Store for Book {
                 stmt.bind((3, &addr.addr))?;
                 stmt.bind((4, addr.source))?;
                 stmt.bind((5, timestamp as i64))?;
+                stmt.next()?;
+            }
+            for relay in relays {
+                let mut stmt = db.prepare(
+                    "INSERT INTO relays (node, relay_node, source, timestamp)
+                    VALUES (?1, ?2, ?3, ?4)
+                    ON CONFLICT DO UPDATE
+                    SET timestamp = ?5
+                    WHERE timestamp < ?5",
+                )?;
+                stmt.bind((1, node))?;
+                stmt.bind((2, &relay.relay_node_id))?;
+                stmt.bind((3, relay.source))?;
+                stmt.bind((4, timestamp as i64))?;
                 stmt.next()?;
             }
             Ok(db.change_count() > 0)
@@ -222,6 +257,35 @@ impl Store for Book {
                 node,
                 KnownAddress {
                     addr,
+                    source,
+                    last_success,
+                    last_attempt,
+                },
+            ));
+        }
+        Ok(Box::new(entries.into_iter()))
+    }
+
+    fn relays(&self) -> Result<Box<dyn Iterator<Item = (NodeId, KnownRelay)>>, Error> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT node, relay_node, source, last_success, last_attempt FROM relays ORDER BY node")?
+            .into_iter();
+        let mut entries = Vec::new();
+
+        while let Some(Ok(row)) = stmt.next() {
+            let node = row.read::<NodeId, _>("node");
+            let relay_node_id = row.read::<NodeId, _>("relay_node");
+            let source = row.read::<Source, _>("source");
+            let last_success = row.read::<Option<i64>, _>("last_success");
+            let last_attempt = row.read::<Option<i64>, _>("last_attempt");
+            let last_success = last_success.map(|t| LocalTime::from_millis(t as u128));
+            let last_attempt = last_attempt.map(|t| LocalTime::from_millis(t as u128));
+
+            entries.push((
+                node,
+                KnownRelay {
+                    relay_node_id,
                     source,
                     last_success,
                     last_attempt,
@@ -295,6 +359,7 @@ pub trait Store {
         pow: u32,
         timestamp: Timestamp,
         addrs: impl IntoIterator<Item = KnownAddress>,
+        relays: impl IntoIterator<Item = KnownRelay>,
     ) -> Result<bool, Error>;
     /// Remove an address from the store.
     fn remove(&mut self, id: &NodeId) -> Result<bool, Error>;
@@ -306,6 +371,8 @@ pub trait Store {
     }
     /// Get the address entries in the store.
     fn entries(&self) -> Result<Box<dyn Iterator<Item = (NodeId, KnownAddress)>>, Error>;
+    /// Get the relay entries in the store.
+    fn relays(&self) -> Result<Box<dyn Iterator<Item = (NodeId, KnownRelay)>>, Error>;
     /// Mark a node as attempted at a certain time.
     fn attempted(&self, nid: &NodeId, addr: &Address, time: Timestamp) -> Result<(), Error>;
     /// Mark a node as successfully connected at a certain time.
@@ -417,13 +484,21 @@ mod test {
         let timestamp = LocalTime::now().as_millis();
 
         cache
-            .insert(&alice, features, Alias::new("alice"), 16, timestamp, [])
+            .insert(&alice, features, Alias::new("alice"), 16, timestamp, [], [])
             .unwrap();
         let node = cache.get(&alice).unwrap().unwrap();
         assert_eq!(node.alias.as_ref(), "alice");
 
         cache
-            .insert(&alice, features, Alias::new("bob"), 16, timestamp + 1, [])
+            .insert(
+                &alice,
+                features,
+                Alias::new("bob"),
+                16,
+                timestamp + 1,
+                [],
+                [],
+            )
             .unwrap();
         let node = cache.get(&alice).unwrap().unwrap();
         assert_eq!(node.alias.as_ref(), "bob");
@@ -450,6 +525,7 @@ mod test {
                 16,
                 timestamp,
                 [ka.clone()],
+                [],
             )
             .unwrap();
         assert!(inserted);
@@ -478,12 +554,20 @@ mod test {
             last_attempt: None,
         };
         let inserted = cache
-            .insert(&alice, features, alias.clone(), 0, timestamp, [ka.clone()])
+            .insert(
+                &alice,
+                features,
+                alias.clone(),
+                0,
+                timestamp,
+                [ka.clone()],
+                [],
+            )
             .unwrap();
         assert!(inserted);
 
         let inserted = cache
-            .insert(&alice, features, alias, 0, timestamp, [ka])
+            .insert(&alice, features, alias, 0, timestamp, [ka], [])
             .unwrap();
         assert!(!inserted);
 
@@ -506,17 +590,17 @@ mod test {
         };
 
         let updated = cache
-            .insert(&alice, features, alias1, 0, timestamp, [ka.clone()])
+            .insert(&alice, features, alias1, 0, timestamp, [ka.clone()], [])
             .unwrap();
         assert!(updated);
 
         let updated = cache
-            .insert(&alice, features, alias2.clone(), 0, timestamp, [])
+            .insert(&alice, features, alias2.clone(), 0, timestamp, [], [])
             .unwrap();
         assert!(!updated, "Can't update using the same timestamp");
 
         let updated = cache
-            .insert(&alice, features, alias2.clone(), 0, timestamp - 1, [])
+            .insert(&alice, features, alias2.clone(), 0, timestamp - 1, [], [])
             .unwrap();
         assert!(!updated, "Can't update using a smaller timestamp");
 
@@ -526,12 +610,20 @@ mod test {
         assert_eq!(node.pow, 0);
 
         let updated = cache
-            .insert(&alice, features, alias2.clone(), 0, timestamp + 1, [])
+            .insert(&alice, features, alias2.clone(), 0, timestamp + 1, [], [])
             .unwrap();
         assert!(updated, "Can update with a larger timestamp");
 
         let updated = cache
-            .insert(&alice, node::Features::NONE, alias2, 1, timestamp + 2, [])
+            .insert(
+                &alice,
+                node::Features::NONE,
+                alias2,
+                1,
+                timestamp + 2,
+                [],
+                [],
+            )
             .unwrap();
         assert!(updated);
 
@@ -572,10 +664,11 @@ mod test {
                     0,
                     timestamp,
                     [ka.clone()],
+                    [],
                 )
                 .unwrap();
             cache
-                .insert(&bob, features, bob_alias.clone(), 0, timestamp, [ka])
+                .insert(&bob, features, bob_alias.clone(), 0, timestamp, [ka], [])
                 .unwrap();
         }
         assert_eq!(cache.len().unwrap(), 6);
@@ -611,7 +704,7 @@ mod test {
             };
             expected.push((id, ka.clone()));
             cache
-                .insert(&id, features, alias.clone(), 0, timestamp, [ka])
+                .insert(&id, features, alias.clone(), 0, timestamp, [ka], [])
                 .unwrap();
         }
 

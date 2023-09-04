@@ -7,7 +7,7 @@ use nonempty::NonEmpty;
 
 use crate::collections::RandomMap;
 use crate::node;
-use crate::node::{Address, Alias};
+use crate::node::{Address, Alias, NodeId};
 use crate::prelude::Timestamp;
 
 /// A map with the ability to randomly select values.
@@ -98,6 +98,8 @@ pub struct Node {
     pub features: node::Features,
     /// Advertized addresses
     pub addrs: Vec<KnownAddress>,
+    /// Advertised relays
+    pub relays: Vec<KnownRelay>,
     /// Proof-of-work included in node announcement.
     pub pow: u32,
     /// When this data was published.
@@ -123,6 +125,32 @@ impl KnownAddress {
     pub fn new(addr: Address, source: Source) -> Self {
         Self {
             addr,
+            source,
+            last_success: None,
+            last_attempt: None,
+        }
+    }
+}
+
+/// A known relay.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownRelay {
+    /// Node ID of the relay.
+    pub relay_node_id: NodeId,
+    /// Address of the peer who sent us this address.
+    pub source: Source,
+    /// Last time we successfully performed a rendezvous connect via this relay.
+    pub last_success: Option<LocalTime>,
+    /// Last time we attempted a rendezvous connect via this relay.
+    pub last_attempt: Option<LocalTime>,
+}
+
+impl KnownRelay {
+    /// Create a new known address.
+    pub fn new(relay_node_id: NodeId, source: Source) -> Self {
+        Self {
+            relay_node_id,
             source,
             last_success: None,
             last_attempt: None,

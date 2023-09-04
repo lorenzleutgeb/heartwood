@@ -13,12 +13,23 @@ pub fn node(config: &Config, timestamp: Timestamp) -> NodeAnnouncement {
         .clone()
         .try_into()
         .expect("external addresses are within the limit");
+    let relays = if addresses.is_empty() {
+        BoundedVec::collect_from(
+            config
+                .connect
+                .iter()
+                .map(|connect_address| connect_address.node_id),
+        )
+    } else {
+        BoundedVec::new()
+    };
 
     NodeAnnouncement {
         features,
         timestamp,
         alias,
         addresses,
+        relays,
         nonce: 0,
     }
 }

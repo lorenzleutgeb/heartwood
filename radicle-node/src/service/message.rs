@@ -61,6 +61,8 @@ pub struct NodeAnnouncement {
     pub alias: Alias,
     /// Announced addresses.
     pub addresses: BoundedVec<Address, ADDRESS_LIMIT>,
+    /// Announced relays.
+    pub relays: BoundedVec<NodeId, ADDRESS_LIMIT>,
     /// Nonce used for announcement proof-of-work.
     pub nonce: u64,
 }
@@ -128,6 +130,7 @@ impl wire::Encode for NodeAnnouncement {
         n += self.timestamp.encode(writer)?;
         n += self.alias.encode(writer)?;
         n += self.addresses.encode(writer)?;
+        n += self.relays.encode(writer)?;
         n += self.nonce.encode(writer)?;
 
         Ok(n)
@@ -140,6 +143,7 @@ impl wire::Decode for NodeAnnouncement {
         let timestamp = Timestamp::decode(reader)?;
         let alias = wire::Decode::decode(reader)?;
         let addresses = BoundedVec::<Address, ADDRESS_LIMIT>::decode(reader)?;
+        let relays = BoundedVec::<NodeId, ADDRESS_LIMIT>::decode(reader)?;
         let nonce = u64::decode(reader)?;
 
         Ok(Self {
@@ -147,6 +151,7 @@ impl wire::Decode for NodeAnnouncement {
             timestamp,
             alias,
             addresses,
+            relays,
             nonce,
         })
     }
@@ -626,12 +631,13 @@ mod tests {
             timestamp: 42491841,
             alias: Alias::new("alice"),
             addresses: BoundedVec::new(),
+            relays: BoundedVec::new(),
             nonce: 0,
         };
 
         assert_eq!(ann.work(), 0);
-        assert_eq!(ann.clone().solve(1).unwrap().work(), 4);
-        assert_eq!(ann.clone().solve(8).unwrap().work(), 9);
+        assert_eq!(ann.clone().solve(1).unwrap().work(), 1);
+        assert_eq!(ann.clone().solve(8).unwrap().work(), 10);
         assert_eq!(ann.solve(14).unwrap().work(), 14);
     }
 }

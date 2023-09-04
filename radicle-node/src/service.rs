@@ -23,7 +23,7 @@ use log::*;
 use nonempty::NonEmpty;
 
 use radicle::node::address;
-use radicle::node::address::{AddressBook, KnownAddress};
+use radicle::node::address::{AddressBook, KnownAddress, KnownRelay};
 use radicle::node::config::PeerConfig;
 use radicle::node::ConnectOptions;
 use radicle::storage::RepositoryError;
@@ -440,6 +440,10 @@ where
                     .addresses
                     .iter()
                     .map(|a| KnownAddress::new(a.clone(), address::Source::Peer)),
+                self.node
+                    .relays
+                    .iter()
+                    .map(|relay_nid| KnownRelay::new(relay_nid.clone(), address::Source::Peer)),
             )
             .expect("Service::initialize: error adding local node to address database");
 
@@ -1067,6 +1071,7 @@ where
                 ann @ NodeAnnouncement {
                     features,
                     addresses,
+                    relays,
                     ..
                 },
             ) => {
@@ -1086,6 +1091,9 @@ where
                         .iter()
                         .filter(|a| a.is_routable() || relayer_addr.is_local())
                         .map(|a| KnownAddress::new(a.clone(), address::Source::Peer)),
+                    relays
+                        .iter()
+                        .map(|relay_nid| KnownRelay::new(relay_nid.clone(), address::Source::Peer)),
                 ) {
                     Ok(updated) => {
                         // Only relay if we received new information.

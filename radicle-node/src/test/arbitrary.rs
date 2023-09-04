@@ -68,6 +68,7 @@ impl Arbitrary for Message {
                     timestamp: Timestamp::arbitrary(g),
                     alias: Alias::arbitrary(g),
                     addresses: Arbitrary::arbitrary(g),
+                    relays: Arbitrary::arbitrary(g),
                     nonce: u64::arbitrary(g),
                 }
                 .into();

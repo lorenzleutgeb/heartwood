@@ -240,6 +240,7 @@ where
                     0,
                     timestamp,
                     Some(known_address),
+                    [],
                 )
                 .unwrap();
         }
@@ -286,6 +287,7 @@ where
                 timestamp: self.timestamp(),
                 alias: Alias::from_str(self.name).unwrap(),
                 addresses: Some(net::SocketAddr::from((self.ip, node::DEFAULT_PORT)).into()).into(),
+                relays: BoundedVec::new(),
                 nonce: 0,
             }
             .solve(0)

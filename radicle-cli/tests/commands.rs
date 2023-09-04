@@ -664,6 +664,7 @@ fn rad_clone_connect() {
                 node::Address::from(alice.addr),
                 node::address::Source::Imported,
             )],
+            [],
         )
         .unwrap();
     eve.addresses
@@ -677,6 +678,7 @@ fn rad_clone_connect() {
                 node::Address::from(bob.addr),
                 node::address::Source::Imported,
             )],
+            [],
         )
         .unwrap();
     eve.config.peers = node::config::PeerConfig::Static;

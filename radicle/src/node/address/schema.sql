@@ -60,3 +60,19 @@ create table if not exists "announcements" (
   --
   unique ("node", "repo", "type")
 ) strict;
+
+create table if not exists "relays" (
+  -- Node ID of the node behind the relay.
+  "node"               text      not null references "nodes" ("id"),
+  -- Node ID of the relay.
+  "relay_node"         text      not null,
+  -- Where we got this relay from.
+  "source"             text      not null,
+  -- When this relay was announced.
+  "timestamp"          integer   not null,
+  -- Local time at which we last attempted a rendezvous connect with this node via this relay.
+  "last_attempt"       integer   default null,
+  -- Local time at which we successfully performed a rendezvous connect with this node via this relay.
+  "last_success"       integer   default null,
+  unique ("node", "relay_node")
+) strict;

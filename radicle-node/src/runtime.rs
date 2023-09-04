@@ -202,6 +202,7 @@ impl Runtime {
                     0,
                     clock.as_secs(),
                     [node::KnownAddress::new(addr, address::Source::Bootstrap)],
+                    [],
                 )?;
             }
             log::info!(target: "node", "{} nodes added to address book", addresses.len()?);
