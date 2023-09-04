@@ -1,5 +1,6 @@
 use std::io::BufRead as _;
 use std::mem::ManuallyDrop;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{
@@ -386,6 +387,10 @@ impl<G: cyphernet::Ecdh<Pk = NodeId> + Signer + Clone> Node<G> {
     /// Spawn a node in its own thread.
     pub fn spawn(self) -> NodeHandle<G> {
         let listen = vec![([0, 0, 0, 0], 0).into()];
+        self.spawn_with_listen_addrs(listen)
+    }
+
+    pub fn spawn_with_listen_addrs(self, listen: Vec<SocketAddr>) -> NodeHandle<G> {
         let proxy = net::SocketAddr::new(net::Ipv4Addr::LOCALHOST.into(), 9050);
         let (_, signals) = chan::bounded(1);
         let rt = Runtime::init(
