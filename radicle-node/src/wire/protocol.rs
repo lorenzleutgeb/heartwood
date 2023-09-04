@@ -290,18 +290,18 @@ impl Peers {
         self.0.remove(fd)
     }
 
-    fn lookup(&self, node_id: &NodeId) -> Option<(RawFd, &Peer)> {
-        self.0
-            .iter()
-            .find(|(_, peer)| peer.id() == Some(node_id))
-            .map(|(fd, peer)| (*fd, peer))
+    fn lookup_connected(&self, node_id: &NodeId) -> Option<(RawFd, &Peer)> {
+        self.0.iter().find_map(|(fd, peer)| match peer {
+            Peer::Connected { nid, .. } if nid == node_id => Some((*fd, peer)),
+            _ => None,
+        })
     }
 
-    fn lookup_mut(&mut self, node_id: &NodeId) -> Option<(RawFd, &mut Peer)> {
-        self.0
-            .iter_mut()
-            .find(|(_, peer)| peer.id() == Some(node_id))
-            .map(|(fd, peer)| (*fd, peer))
+    fn lookup_connected_mut(&mut self, node_id: &NodeId) -> Option<(RawFd, &mut Peer)> {
+        self.0.iter_mut().find_map(|(fd, peer)| match peer {
+            Peer::Connected { nid, .. } if nid == node_id => Some((*fd, peer)),
+            _ => None,
+        })
     }
 
     fn active(&self) -> impl Iterator<Item = (RawFd, &NodeId)> {
@@ -397,8 +397,8 @@ where
         );
 
         let nid = task.remote;
-        let Some((fd, peer)) = self.peers.lookup_mut(&nid) else {
-            log::warn!(target: "wire", "Peer {nid} not found; ignoring fetch result");
+        let Some((fd, peer)) = self.peers.lookup_connected_mut(&nid) else {
+            log::warn!(target: "wire", "Connected peer {nid} not found; ignoring fetch result");
             return;
         };
 
@@ -431,7 +431,7 @@ where
     }
 
     fn flush(&mut self, remote: NodeId, stream: StreamId) {
-        let Some((fd, peer)) = self.peers.lookup(&remote) else {
+        let Some((fd, peer)) = self.peers.lookup_connected(&remote) else {
             log::warn!(target: "wire", "Peer {remote} is not known; ignoring flush");
             return;
         };
@@ -769,7 +769,7 @@ where
         while let Some(ev) = self.service.next() {
             match ev {
                 Io::Write(node_id, msgs) => {
-                    let (fd, link) = match self.peers.lookup(&node_id) {
+                    let (fd, link) = match self.peers.lookup_connected(&node_id) {
                         Some((fd, Peer::Connected { link, .. })) => (fd, *link),
                         Some((_, peer)) => {
                             // If the peer is disconnected by the wire protocol, the service may
@@ -846,7 +846,7 @@ where
                     }
                 }
                 Io::Disconnect(nid, reason) => {
-                    if let Some((fd, Peer::Connected { .. })) = self.peers.lookup(&nid) {
+                    if let Some((fd, Peer::Connected { .. })) = self.peers.lookup_connected(&nid) {
                         self.disconnect(fd, reason);
                     } else {
                         log::warn!(target: "wire", "Peer {nid} is not connected: ignoring disconnect");
@@ -865,7 +865,7 @@ where
                     log::trace!(target: "wire", "Processing fetch for {rid} from {remote}..");
 
                     let Some((fd, Peer::Connected { link, streams,  .. })) =
-                        self.peers.lookup_mut(&remote) else {
+                        self.peers.lookup_connected_mut(&remote) else {
                             // Nb. It's possible that a peer is disconnected while an `Io::Fetch`
                             // is in the service's i/o buffer. Since the service may not purge the
                             // buffer on disconnect, we should just ignore i/o actions that don't
