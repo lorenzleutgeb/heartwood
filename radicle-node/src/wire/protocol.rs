@@ -312,16 +312,6 @@ impl Peers {
             Peer::Disconnecting { .. } => None,
         })
     }
-
-    fn connected(&self) -> impl Iterator<Item = (RawFd, &NodeId)> {
-        self.0.iter().filter_map(|(fd, peer)| {
-            if let Peer::Connected { nid: id, .. } = peer {
-                Some((*fd, id))
-            } else {
-                None
-            }
-        })
-    }
 }
 
 /// Wire protocol implementation for a set of peers.
@@ -799,7 +789,7 @@ where
                     local_addr,
                     remote_addr: addr,
                 } => {
-                    if self.peers.connected().any(|(_, id)| id == &node_id) {
+                    if self.peers.active().any(|(_, id)| id == &node_id) {
                         log::error!(
                             target: "wire",
                             "Attempt to connect to already connected peer {node_id}"
