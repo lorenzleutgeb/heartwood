@@ -527,32 +527,66 @@ where
 
                 log::debug!(target: "wire", "Session established with {id} (fd={fd})");
 
-                let conflicting = self
-                    .peers
-                    .active()
-                    .filter(|(other, d)| **d == id && *other != fd)
-                    .map(|(fd, _)| fd)
-                    .collect::<Vec<_>>();
-
-                for fd in conflicting {
-                    log::warn!(
-                        target: "wire", "Closing conflicting session with {id} (fd={fd})"
+                let mut conflicting = {
+                    self.peers
+                        .active()
+                        .filter(|(other, d)| **d == id && *other != fd)
+                        .map(|(fd, _)| fd)
+                };
+                let conflicting_opt = conflicting.next();
+                for conflicting_fd in conflicting.collect::<Vec<_>>() {
+                    if cfg!(debug_assertions) {
+                        panic!("multiple conflicting sessions with {id}");
+                    }
+                    log::error!(
+                        target: "wire", "Closing additional conflicting session with {id} (fd={conflicting_fd})"
                     );
-                    self.disconnect(
-                        fd,
-                        DisconnectReason::Dial(Arc::new(io::Error::from(
-                            io::ErrorKind::AlreadyExists,
-                        ))),
-                    );
+                    self.disconnect(conflicting_fd, DisconnectReason::Conflict);
                 }
-
                 let Some(peer) = self.peers.get_mut(&fd) else {
                     log::error!(target: "wire", "Session not found for fd {fd}");
                     return;
                 };
-                let (local_addr, addr, link) = peer.connected(id);
-
-                self.service.connected(id, local_addr, addr.into(), link);
+                match conflicting_opt {
+                    Some(conflicting_fd) => {
+                        let use_new_connection = {
+                            let is_outbound_opt = match peer {
+                                Peer::Inbound { .. } => Some(false),
+                                Peer::Outbound { .. } => Some(true),
+                                Peer::Connected { .. } => {
+                                    panic!("established session on newly-established connection");
+                                }
+                                Peer::Disconnecting { .. } => None,
+                            };
+                            match is_outbound_opt {
+                                None => false,
+                                Some(is_outbound) => {
+                                    let i_have_outbound_precedence =
+                                        { self.signer.public_key() < &id };
+                                    i_have_outbound_precedence == is_outbound
+                                }
+                            }
+                        };
+                        if use_new_connection {
+                            log::info!(
+                                target: "wire", "Closing old conflicting session with {id} (fd={conflicting_fd})"
+                            );
+                            let (local_addr, addr, link) = peer.connected(id);
+                            self.service.disconnected(id, &DisconnectReason::Conflict);
+                            self.service.connected(id, local_addr, addr.into(), link);
+                            self.disconnect(conflicting_fd, DisconnectReason::Conflict);
+                        } else {
+                            log::info!(
+                                target: "wire", "Closing new conflicting session with {id} (fd={fd})"
+                            );
+                            self.disconnect(fd, DisconnectReason::Conflict);
+                        }
+                    }
+                    None => {
+                        let (local_addr, addr, link) = peer.connected(id);
+                        self.service.connected(id, local_addr, addr.into(), link);
+                    }
+                }
             }
             SessionEvent::Data(data) => {
                 if let Some(Peer::Connected {
@@ -722,15 +756,20 @@ where
         match self.peers.entry(fd) {
             Entry::Occupied(e) => {
                 match e.get() {
-                    Peer::Disconnecting {
-                        nid: id, reason, ..
-                    } => {
+                    Peer::Disconnecting { nid, reason } => {
                         // Disconnect TCP stream.
                         drop(transport);
 
                         // If there is no ID, the service is not aware of the peer.
-                        if let Some(id) = id {
-                            self.service.disconnected(*id, reason);
+                        if let Some(nid) = nid {
+                            // If we disconnected due to a conflict then the service already knows
+                            // about the disconnection.
+                            match reason {
+                                DisconnectReason::Conflict => (),
+                                _ => {
+                                    self.service.disconnected(*nid, &reason);
+                                }
+                            }
                         }
                         e.remove();
                     }

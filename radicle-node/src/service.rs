@@ -1789,6 +1789,8 @@ pub enum DisconnectReason {
     Session(session::Error),
     /// User requested disconnect
     Command,
+    /// Another connection with the peer exists.
+    Conflict,
 }
 
 impl DisconnectReason {
@@ -1809,6 +1811,7 @@ impl DisconnectReason {
             Self::Command => false,
             Self::Fetch(_) => true,
             Self::Session(err) => err.is_transient(),
+            Self::Conflict => false,
         }
     }
 }
@@ -1821,6 +1824,7 @@ impl fmt::Display for DisconnectReason {
             Self::Command => write!(f, "command"),
             Self::Session(err) => write!(f, "{err}"),
             Self::Fetch(err) => write!(f, "fetch: {err}"),
+            Self::Conflict => write!(f, "conflict"),
         }
     }
 }
