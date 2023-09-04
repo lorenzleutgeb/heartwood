@@ -295,11 +295,11 @@ impl wire::Encode for Address {
         match self.host {
             HostName::Ip(net::IpAddr::V4(ip)) => {
                 n += u8::from(AddressType::Ipv4).encode(writer)?;
-                n += ip.octets().encode(writer)?;
+                n += ip.encode(writer)?;
             }
             HostName::Ip(net::IpAddr::V6(ip)) => {
                 n += u8::from(AddressType::Ipv6).encode(writer)?;
-                n += ip.octets().encode(writer)?;
+                n += ip.encode(writer)?;
             }
             HostName::Dns(ref dns) => {
                 n += u8::from(AddressType::Dns).encode(writer)?;
@@ -320,14 +320,12 @@ impl wire::Decode for Address {
         let addrtype = reader.read_u8()?;
         let host = match AddressType::try_from(addrtype) {
             Ok(AddressType::Ipv4) => {
-                let octets: [u8; 4] = wire::Decode::decode(reader)?;
-                let ip = net::Ipv4Addr::from(octets);
+                let ip = wire::Decode::decode(reader)?;
 
                 HostName::Ip(net::IpAddr::V4(ip))
             }
             Ok(AddressType::Ipv6) => {
-                let octets: [u8; 16] = wire::Decode::decode(reader)?;
-                let ip = net::Ipv6Addr::from(octets);
+                let ip = wire::Decode::decode(reader)?;
 
                 HostName::Ip(net::IpAddr::V6(ip))
             }
@@ -364,6 +362,84 @@ impl wire::Decode for ZeroBytes {
             _ = u8::decode(reader)?;
         }
         Ok(ZeroBytes::new(zeroes))
+    }
+}
+
+impl wire::Encode for net::SocketAddr {
+    fn encode<W: io::Write + ?Sized>(&self, writer: &mut W) -> Result<usize, io::Error> {
+        let mut n = 0;
+        n += self.ip().encode(writer)?;
+        n += self.port().encode(writer)?;
+        Ok(n)
+    }
+}
+
+impl wire::Decode for net::SocketAddr {
+    fn decode<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<Self, wire::Error> {
+        let ip = wire::Decode::decode(reader)?;
+        let port = wire::Decode::decode(reader)?;
+        Ok(net::SocketAddr::new(ip, port))
+    }
+}
+
+impl wire::Encode for net::IpAddr {
+    fn encode<W: io::Write + ?Sized>(&self, writer: &mut W) -> Result<usize, io::Error> {
+        let mut n = 0;
+        match self {
+            net::IpAddr::V4(addr) => {
+                n += u8::from(AddressType::Ipv4).encode(writer)?;
+                n += addr.encode(writer)?;
+            }
+            net::IpAddr::V6(addr) => {
+                n += u8::from(AddressType::Ipv6).encode(writer)?;
+                n += addr.encode(writer)?;
+            }
+        }
+        Ok(n)
+    }
+}
+
+impl wire::Decode for net::IpAddr {
+    fn decode<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<Self, wire::Error> {
+        let addrtype = reader.read_u8()?;
+        match AddressType::try_from(addrtype) {
+            Ok(AddressType::Ipv4) => {
+                let addr = wire::Decode::decode(reader)?;
+                Ok(net::IpAddr::V4(addr))
+            }
+            Ok(AddressType::Ipv6) => {
+                let addr = wire::Decode::decode(reader)?;
+                Ok(net::IpAddr::V6(addr))
+            }
+            Ok(other) => Err(wire::Error::InvalidAddressType(other)),
+            Err(other) => Err(wire::Error::UnknownAddressType(other)),
+        }
+    }
+}
+
+impl wire::Encode for net::Ipv4Addr {
+    fn encode<W: io::Write + ?Sized>(&self, writer: &mut W) -> Result<usize, io::Error> {
+        self.octets().encode(writer)
+    }
+}
+
+impl wire::Decode for net::Ipv4Addr {
+    fn decode<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<Self, wire::Error> {
+        let octets: [u8; 4] = wire::Decode::decode(reader)?;
+        Ok(net::Ipv4Addr::from(octets))
+    }
+}
+
+impl wire::Encode for net::Ipv6Addr {
+    fn encode<W: io::Write + ?Sized>(&self, writer: &mut W) -> Result<usize, io::Error> {
+        self.octets().encode(writer)
+    }
+}
+
+impl wire::Decode for net::Ipv6Addr {
+    fn decode<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<Self, wire::Error> {
+        let octets: [u8; 16] = wire::Decode::decode(reader)?;
+        Ok(net::Ipv6Addr::from(octets))
     }
 }
 

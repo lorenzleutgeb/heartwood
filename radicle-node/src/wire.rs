@@ -58,6 +58,8 @@ pub enum Error {
     InvalidProtocolVersion([u8; 4]),
     #[error("unknown address type `{0}`")]
     UnknownAddressType(u8),
+    #[error("invalid address type `{0:?}`")]
+    InvalidAddressType(AddressType),
     #[error("unknown message type `{0}`")]
     UnknownMessageType(u16),
     #[error("unexpected bytes")]
