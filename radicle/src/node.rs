@@ -316,6 +316,20 @@ impl cyphernet::addr::Addr for Address {
     }
 }
 
+impl From<net::SocketAddrV4> for Address {
+    fn from(addr: net::SocketAddrV4) -> Self {
+        let addr: SocketAddr = addr.into();
+        Self::from(addr)
+    }
+}
+
+impl From<net::SocketAddrV6> for Address {
+    fn from(addr: net::SocketAddrV6) -> Self {
+        let addr: SocketAddr = addr.into();
+        Self::from(addr)
+    }
+}
+
 impl From<net::SocketAddr> for Address {
     fn from(addr: net::SocketAddr) -> Self {
         Address(NetAddr {
