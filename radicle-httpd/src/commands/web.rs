@@ -125,6 +125,7 @@ pub fn run(options: Options, ctx: impl term::Context) -> anyhow::Result<()> {
             aliases: Default::default(),
             listen: options.listen,
             cache: None,
+            session_expiry: crate::api::auth::DEFAULT_AUTHORIZED_SESSIONS_EXPIRATION,
         }));
         Some((runtime, httpd_handle))
     } else {

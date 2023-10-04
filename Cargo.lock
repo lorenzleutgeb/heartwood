@@ -2488,6 +2488,7 @@ dependencies = [
  "radicle-term",
  "serde",
  "serde_json",
+ "sqlite",
  "tempfile",
  "thiserror",
  "time",

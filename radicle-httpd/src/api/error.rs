@@ -82,6 +82,14 @@ pub enum Error {
     #[error(transparent)]
     Node(#[from] radicle::node::Error),
 
+    /// Session store error.
+    #[error(transparent)]
+    SessionStore(#[from] crate::session::store::SessionStoreError),
+
+    /// Session expiration time error
+    #[error(transparent)]
+    ExpirationTime(#[from] time::error::ComponentRange),
+
     /// Invalid update to issue or patch.
     #[error("{0}")]
     BadRequest(String),

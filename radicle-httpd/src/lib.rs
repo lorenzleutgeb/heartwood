@@ -1,8 +1,10 @@
 #![allow(clippy::type_complexity)]
 #![allow(clippy::too_many_arguments)]
 #![recursion_limit = "256"]
+pub mod api;
 pub mod commands;
 pub mod error;
+pub mod session;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -26,7 +28,6 @@ use radicle::Profile;
 
 use tracing_extra::{tracing_middleware, ColoredStatus, Paint, RequestId, TracingInfo};
 
-mod api;
 mod axum_extra;
 mod cache;
 mod git;
@@ -43,6 +44,7 @@ pub struct Options {
     pub aliases: HashMap<String, Id>,
     pub listen: SocketAddr,
     pub cache: Option<NonZeroUsize>,
+    pub session_expiry: time::Duration,
 }
 
 /// Run the Server.
@@ -60,6 +62,7 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
     tracing::info!("listening on http://{}", options.listen);
 
     let profile = Profile::load()?;
+
     let request_id = RequestId::new();
 
     tracing::info!("using radicle home at {}", profile.home().path().display());
@@ -110,6 +113,11 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
 fn router(options: Options, profile: Profile) -> anyhow::Result<Router> {
     let profile = Arc::new(profile);
     let ctx = api::Context::new(profile.clone(), &options);
+
+    // Get a connection to sessions db and remove expired sessions on startup.
+    // This also ensures that the directories and database file are created.
+    let mut sessions_db = ctx.open_session_db()?;
+    sessions_db.remove_expired()?;
 
     let api_router = api::router(ctx);
     let git_router = git::router(profile.clone(), options.aliases);
@@ -167,6 +175,7 @@ mod routes {
                 aliases: HashMap::new(),
                 listen: SocketAddr::from(([0, 0, 0, 0], 8080)),
                 cache: None,
+                session_expiry: crate::api::auth::DEFAULT_AUTHORIZED_SESSIONS_EXPIRATION,
             },
             test::profile(tmp.path(), [0xff; 32]),
         )

@@ -262,27 +262,41 @@ fn seed_with_signer<G: Signer>(dir: &Path, profile: radicle::Profile, signer: &G
         aliases: std::collections::HashMap::new(),
         listen: std::net::SocketAddr::from(([0, 0, 0, 0], 8080)),
         cache: Some(crate::DEFAULT_CACHE_SIZE),
+        session_expiry: auth::DEFAULT_AUTHORIZED_SESSIONS_EXPIRATION,
     };
 
     Context::new(Arc::new(profile), &options)
 }
 
-/// Adds an authorized session to the Context::sessions HashMap.
+/// Adds an authorized session to the session store.
 pub async fn create_session(ctx: Context) {
     let issued_at = OffsetDateTime::now_utc();
-    let mut sessions = ctx.sessions().write().await;
-    sessions.insert(
-        String::from(SESSION_ID),
-        auth::Session {
-            status: auth::AuthState::Authorized,
-            public_key: ctx.profile().public_key,
-            alias: ctx.profile().config.node.alias.clone(),
-            issued_at,
-            expires_at: issued_at
-                .checked_add(auth::AUTHORIZED_SESSIONS_EXPIRATION)
-                .unwrap(),
-        },
-    );
+    let mut sessions = ctx.open_session_db().unwrap();
+    let encrypted_session_id = ctx
+        .profile()
+        .signer()
+        .unwrap()
+        .try_sign(SESSION_ID.as_bytes())
+        .unwrap()
+        .to_string();
+    sessions.remove(&encrypted_session_id).unwrap();
+    let expires_at = if ctx.session_expiry.is_negative() || ctx.session_expiry.is_zero() {
+        OffsetDateTime::from_unix_timestamp(0).unwrap()
+    } else {
+        issued_at.checked_add(ctx.session_expiry).unwrap()
+    };
+    sessions
+        .insert(
+            &encrypted_session_id,
+            &auth::Session {
+                status: auth::AuthState::Authorized,
+                public_key: ctx.profile().public_key,
+                alias: ctx.profile().config.node.alias.clone(),
+                issued_at,
+                expires_at,
+            },
+        )
+        .expect("error creating session");
 }
 
 pub async fn get(app: &Router, path: impl ToString) -> Response {

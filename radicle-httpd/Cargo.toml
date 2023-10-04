@@ -30,6 +30,7 @@ nonempty = { version = "0.9.0", features = ["serialize"] }
 radicle-surf = { version = "0.18.0", default-features = false, features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+sqlite = { version = "0.32.0", features = ["bundled"] }
 thiserror = { version = "1" }
 time = { version = "0.3.17", features = ["parsing", "serde"] }
 tokio = { version = "1.21", default-features = false, features = ["macros", "rt-multi-thread"] }
