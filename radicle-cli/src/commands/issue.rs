@@ -16,6 +16,7 @@ use radicle::storage;
 use radicle::storage::{WriteRepository, WriteStorage};
 use radicle::Profile;
 use radicle::{cob, Node};
+use radicle_term::io::*;
 
 use crate::git::Rev;
 use crate::terminal as term;
@@ -121,7 +122,7 @@ pub enum Operation {
     },
     React {
         id: Rev,
-        reaction: Reaction,
+        reaction: Option<Reaction>,
         comment_id: Option<thread::CommentId>,
     },
     Assign {
@@ -357,7 +358,7 @@ impl Args for Options {
             },
             OperationName::React => Operation::React {
                 id: id.ok_or_else(|| anyhow!("an issue must be provided"))?,
-                reaction: reaction.ok_or_else(|| anyhow!("a reaction emoji must be provided"))?,
+                reaction,
                 comment_id,
             },
             OperationName::Delete => Operation::Delete {
@@ -457,7 +458,7 @@ pub fn run(options: Options, ctx: impl term::Context) -> anyhow::Result<()> {
         }
         Operation::React {
             id,
-            reaction,
+            mut reaction,
             comment_id,
         } => {
             let id = id.resolve(&repo.backend)?;
@@ -466,7 +467,17 @@ pub fn run(options: Options, ctx: impl term::Context) -> anyhow::Result<()> {
                     let (comment_id, _) = term::io::comment_select(&issue).unwrap();
                     *comment_id
                 });
-                issue.react(comment_id, reaction, true, &signer)?;
+                if reaction.is_none() {
+                    let emoji = Select::new(
+                        "With which emoji do you want to react?",
+                        vec!['👍', '👎', '😄', '🎉', '🙁', '🚀', '👀'],
+                    )
+                    .with_render_config(*CONFIG)
+                    .prompt()?;
+                    reaction = Some(Reaction::new(emoji)?);
+                }
+                // SAFETY: reaction is never None here.
+                issue.react(comment_id, reaction.unwrap(), true, &signer)?;
             }
         }
         Operation::Open {
