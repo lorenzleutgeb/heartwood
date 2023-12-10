@@ -459,14 +459,17 @@ pub fn run(options: Options, ctx: impl term::Context) -> anyhow::Result<()> {
         Operation::React {
             id,
             mut reaction,
-            comment_id,
+            mut comment_id,
         } => {
             let id = id.resolve(&repo.backend)?;
             if let Ok(mut issue) = issues.get_mut(&id) {
-                let comment_id = comment_id.unwrap_or_else(|| {
-                    let (comment_id, _) = term::io::comment_select(&issue).unwrap();
-                    *comment_id
-                });
+                if comment_id.is_none() {
+                    comment_id = Some(
+                        *term::io::comment_select(&issue)
+                            .ok_or(anyhow!("no comment selected"))?
+                            .0,
+                    );
+                };
                 if reaction.is_none() {
                     let emoji = Select::new(
                         "With which emoji do you want to react?",
@@ -476,8 +479,8 @@ pub fn run(options: Options, ctx: impl term::Context) -> anyhow::Result<()> {
                     .prompt()?;
                     reaction = Some(Reaction::new(emoji)?);
                 }
-                // SAFETY: reaction is never None here.
-                issue.react(comment_id, reaction.unwrap(), true, &signer)?;
+                // SAFETY: comment and reaction is never None here.
+                issue.react(comment_id.unwrap(), reaction.unwrap(), true, &signer)?;
             }
         }
         Operation::Open {
