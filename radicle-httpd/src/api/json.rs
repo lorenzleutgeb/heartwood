@@ -5,16 +5,17 @@ use std::path::Path;
 use std::str;
 
 use base64::prelude::{Engine, BASE64_STANDARD};
-use radicle::cob::{CodeLocation, Reaction};
-use radicle::patch::ReviewId;
 use serde_json::{json, Value};
 
 use radicle::cob::issue::{Issue, IssueId};
 use radicle::cob::patch::{Merge, Patch, PatchId, Review};
 use radicle::cob::thread::{Comment, CommentId, Edit};
 use radicle::cob::{ActorId, Author};
+use radicle::cob::{CodeLocation, Label, Reaction};
 use radicle::git::RefString;
+use radicle::node::notifications::{Notification, NotificationStatus};
 use radicle::node::{Alias, AliasStore};
+use radicle::patch::ReviewId;
 use radicle::prelude::NodeId;
 use radicle::storage::{git, refs, RemoteRepository};
 use radicle_surf::blob::Blob;
@@ -164,6 +165,64 @@ fn author(author: &Author, alias: Option<Alias>) -> Value {
             "alias": alias,
         }),
         None => json!(author),
+    }
+}
+
+/// Returns JSON for a cob notification.
+pub fn notification_cob(
+    n: &Notification,
+    category: String,
+    cob_id: String,
+    title: String,
+    labels: Vec<&Label>,
+    state: String,
+    aliases: &impl AliasStore,
+) -> Value {
+    json!({
+        "id": n.id,
+        "repo": n.repo,
+        "remote": n.remote.map(|a| author(&Author::from(a), aliases.alias(&a))),
+        "category": category,
+        "cob_id": cob_id,
+        "title": title,
+        "labels": labels,
+        "state": state,
+        "status": notification_status(&n.status),
+        "timestamp": n.timestamp.to_string(),
+    })
+}
+
+/// Returns JSON for a branch notification.
+pub fn notification_branch(
+    n: &Notification,
+    category: String,
+    name: String,
+    title: String,
+    state: String,
+    aliases: &impl AliasStore,
+) -> Value {
+    json!({
+        "id": n.id,
+        "repo": n.repo,
+        "remote": n.remote.map(|a| author(&Author::from(a), aliases.alias(&a))),
+        "category": category,
+        "name": name,
+        "title": title,
+        "state": state,
+        "status": notification_status(&n.status),
+        "timestamp": n.timestamp.to_string(),
+    })
+}
+
+/// Returns JSON for a `notification`.
+fn notification_status(status: &NotificationStatus) -> Value {
+    match status {
+        NotificationStatus::ReadAt(time) => {
+            json!({ "type": "readAt", "timestamp": time.to_string() })
+        }
+        NotificationStatus::Unread => {
+            json!({ "type": "unread" })
+        }
     }
 }
 
