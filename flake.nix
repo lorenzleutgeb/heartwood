@@ -51,7 +51,7 @@
       craneLib = (crane.mkLib pkgs).overrideToolchain rustToolChain;
 
       srcFilters = path: type:
-        # Allow sql schemas
+      # Allow sql schemas
         (lib.hasSuffix "\.sql" path)
         ||
         # Allow diff files for testing purposes
@@ -79,8 +79,7 @@
 
       # Common arguments can be set here to avoid repeating them later
       commonArgs = {
-        inherit pname;
-        inherit src;
+        inherit pname src cargoArtifacts;
         strictDeps = true;
 
         buildInputs =
@@ -103,9 +102,18 @@
       cargoArtifacts =
         craneLib.buildDepsOnly commonArgs;
 
+      craneBuild = name: args:
+        craneLib.buildPackage (commonArgs
+          // {
+            inherit (craneLib.crateNameFromCargoToml {cargoToml = ./. + name + "/Cargo.toml";});
+            cargoBuildCommand = "cargo build --release -p ${name}";
+            doCheck = false;
+          }
+          // args);
+
       # Build the listed .adoc files as man pages to the package.
       buildManPages = pages: {
-        nativeBuildInputs = [ pkgs.asciidoctor ];
+        nativeBuildInputs = [pkgs.asciidoctor];
         postInstall = ''
           for f in ${lib.escapeShellArgs pages} ; do
             cat=''${f%.adoc}
@@ -114,7 +122,7 @@
             scripts/build-man-pages.sh "$out/share/man/man$cat" $f
           done
         '';
-        outputs = [ "out" "man" ];
+        outputs = ["out" "man"];
       };
 
       # Build the actual crate itself, reusing the dependency
@@ -123,8 +131,8 @@
         // {
           inherit (craneLib.crateNameFromCargoToml {cargoToml = ./radicle/Cargo.toml;});
           doCheck = false;
-          inherit cargoArtifacts;
-        } // (buildManPages [
+        }
+        // (buildManPages [
           "git-remote-rad.1.adoc"
           "rad.1.adoc"
           "radicle-node.1.adoc"
@@ -148,14 +156,10 @@
         # prevent downstream consumers from building our crate by itself.
         clippy = craneLib.cargoClippy (commonArgs
           // {
-            inherit cargoArtifacts;
             cargoClippyExtraArgs = "--all-targets -- --deny warnings";
           });
 
-        doc = craneLib.cargoDoc (commonArgs
-          // {
-            inherit cargoArtifacts;
-          });
+        doc = craneLib.cargoDoc commonArgs;
 
         # Check formatting
         fmt = craneLib.cargoFmt {
@@ -171,14 +175,12 @@
 
         # Audit licenses
         deny = craneLib.cargoDeny {
-          inherit pname;
-          inherit src;
+          inherit pname src;
         };
 
         # Run tests with cargo-nextest
         nextest = craneLib.cargoNextest (commonArgs
           // {
-            inherit cargoArtifacts;
             partitions = 1;
             partitionType = "count";
             nativeBuildInputs = [
@@ -195,83 +197,60 @@
           });
       };
 
-      packages = {
-        default = radicle;
-        radicle-full = pkgs.buildEnv {
-          name = "radicle-full";
-          paths = with self.packages.${system}; [
-            default
-            radicle-httpd
-          ];
-        };
-        radicle-remote-helper = craneLib.buildPackage (commonArgs
-          // {
-            inherit (craneLib.crateNameFromCargoToml {cargoToml = ./radicle-remote-helper/Cargo.toml;});
-            inherit cargoArtifacts;
-            cargoBuildCommand = "cargo build --release -p radicle-remote-helper";
-            doCheck = false;
-          });
-        radicle-cli = craneLib.buildPackage (commonArgs
-          // {
-            inherit (craneLib.crateNameFromCargoToml {cargoToml = ./radicle-cli/Cargo.toml;});
-            inherit cargoArtifacts;
-            cargoBuildCommand = "cargo build --release -p radicle-cli";
-            doCheck = false;
-          });
-        radicle-node = craneLib.buildPackage (commonArgs
-          // {
-            inherit (craneLib.crateNameFromCargoToml {cargoToml = ./radicle-node/Cargo.toml;});
-            inherit cargoArtifacts;
-            cargoBuildCommand = "cargo build --release -p radicle-node";
-            doCheck = false;
+      packages =
+        {
+          default = radicle;
+          radicle-full = pkgs.buildEnv {
+            name = "radicle-full";
+            paths = with self.packages.${system}; [
+              default
+              radicle-httpd
+            ];
+          };
+          radicle-node = craneBuild "radicle-node" {
             installPhaseCommand = ''
               mkdir -p $out/lib/systemd/system
               cp $src/systemd/radicle-node.service $out/lib/systemd/system/
             '';
-          });
-        radicle-httpd = craneLib.buildPackage (commonArgs
-          // {
-            inherit (craneLib.crateNameFromCargoToml {cargoToml = ./radicle-httpd/Cargo.toml;});
-            inherit cargoArtifacts;
-            cargoBuildCommand = "cargo build --release -p radicle-httpd";
-            doCheck = false;
-            installPhaseCommand = ''
-              mkdir -p $out/lib/systemd/system
-              cp $src/systemd/radicle-httpd.service $out/lib/systemd/system/
-            '';
-          } // (buildManPages [
-            "radicle-httpd.1.adoc"
-          ]));
-      };
+          };
+          radicle-httpd = craneBuild "radicle-httpd" ({
+              installPhaseCommand = ''
+                mkdir -p $out/lib/systemd/system
+                cp $src/systemd/radicle-httpd.service $out/lib/systemd/system/
+              '';
+            }
+            // (buildManPages [
+              "radicle-httpd.1.adoc"
+            ]));
+        }
+        // (lib.genAttrs ["radicle-cli" "radicle-node"] (name: craneBuild name {}));
 
-      apps.default = flake-utils.lib.mkApp {
-        drv = radicle;
-      };
+      apps =
+        {
+          default = flake-utils.lib.mkApp {
+            drv = radicle;
+          };
 
-      apps.radicle-full = flake-utils.lib.mkApp {
-        name = "rad";
-        drv = self.packages.${system}.radicle-full;
-      };
+          radicle-full = flake-utils.lib.mkApp {
+            name = "rad";
+            drv = self.packages.${system}.radicle-full;
+          };
 
-      apps.rad = flake-utils.lib.mkApp {
-        name = "rad";
-        drv = self.packages.${system}.radicle-cli;
-      };
+          rad = flake-utils.lib.mkApp {
+            name = "rad";
+            drv = self.packages.${system}.radicle-cli;
+          };
 
-      apps.git-remote-rad = flake-utils.lib.mkApp {
-        name = "git-remote-rad";
-        drv = self.packages.${system}.radicle-remote-helper;
-      };
-
-      apps.radicle-node = flake-utils.lib.mkApp {
-        name = "radicle-node";
-        drv = self.packages.${system}.radicle-node;
-      };
-
-      apps.radicle-httpd = flake-utils.lib.mkApp {
-        name = "radicle-httpd";
-        drv = self.packages.${system}.radicle-httpd;
-      };
+          git-remote-rad = flake-utils.lib.mkApp {
+            name = "git-remote-rad";
+            drv = self.packages.${system}.radicle-remote-helper;
+          };
+        }
+        // (lib.genAttrs ["radicle-node" "radicle-httpd"] (name:
+          flake-utils.lib.mkApp {
+            inherit name;
+            drv = self.packages.${system}.${name};
+          }));
 
       devShells.default = craneLib.devShell {
         # Extra inputs can be added here; cargo and rustc are provided by default.
