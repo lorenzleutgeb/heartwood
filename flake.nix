@@ -51,7 +51,7 @@
       craneLib = (crane.mkLib pkgs).overrideToolchain rustToolChain;
 
       srcFilters = path: type:
-      # Allow sql schemas
+        # Allow sql schemas
         (lib.hasSuffix "\.sql" path)
         ||
         # Allow diff files for testing purposes
@@ -62,6 +62,9 @@
         ||
         # Allow adoc files
         (lib.hasSuffix "\.adoc" path)
+        ||
+        # Allow systemd service definitions
+        (lib.hasSuffix "\.service" path)
         ||
         # Allow man page build script
         (lib.hasSuffix "build-man-pages\.sh" path)
@@ -221,6 +224,10 @@
             inherit cargoArtifacts;
             cargoBuildCommand = "cargo build --release -p radicle-node";
             doCheck = false;
+            installPhaseCommand = ''
+              mkdir -p $out/lib/systemd/system
+              cp $src/systemd/radicle-node.service $out/lib/systemd/system/
+            '';
           });
         radicle-httpd = craneLib.buildPackage (commonArgs
           // {
@@ -228,6 +235,10 @@
             inherit cargoArtifacts;
             cargoBuildCommand = "cargo build --release -p radicle-httpd";
             doCheck = false;
+            installPhaseCommand = ''
+              mkdir -p $out/lib/systemd/system
+              cp $src/systemd/radicle-httpd.service $out/lib/systemd/system/
+            '';
           } // (buildManPages [
             "radicle-httpd.1.adoc"
           ]));
