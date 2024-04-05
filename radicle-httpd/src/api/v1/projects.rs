@@ -1,23 +1,21 @@
 use std::collections::{BTreeMap, HashMap};
 
 use axum::extract::{DefaultBodyLimit, State};
-use axum::handler::Handler;
-use axum::http::{header, HeaderValue};
-use axum::response::{IntoResponse, Response};
+use axum::response::IntoResponse;
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use axum_auth::AuthBearer;
 use hyper::StatusCode;
+use nonempty::NonEmpty;
 use radicle_surf::blob::BlobRef;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tower_http::set_header::SetResponseHeaderLayer;
 
 use radicle::cob::{
     issue, issue::cache::Issues as _, patch, patch::cache::Patches as _, resolve_embed, Author,
     Embed, Label, Uri,
 };
-use radicle::identity::{Did, RepoId};
+use radicle::identity::{Did, Project, RepoId};
 use radicle::node::routing::Store;
 use radicle::node::{AliasStore, Node, NodeId};
 use radicle::storage::{ReadRepository, ReadStorage, RemoteRepository, WriteRepository};
@@ -26,32 +24,19 @@ use radicle_surf::{diff, Glob, Oid, Repository};
 use crate::api::error::Error;
 use crate::api::project::Info;
 use crate::api::{self, announce_refs, CobsQuery, Context, PaginationQuery, ProjectQuery};
-use crate::axum_extra::{immutable_response, Path, Query};
+use crate::axum_extra::{cached_response, immutable_response, Path, Query};
 
-const CACHE_1_HOUR: &str = "public, max-age=3600, must-revalidate";
 const MAX_BODY_LIMIT: usize = 4_194_304;
 
 pub fn router(ctx: Context) -> Router {
     Router::new()
         .route("/projects", get(project_root_handler))
+        .route("/projects/search", get(project_search_handler))
         .route("/projects/:project", get(project_handler))
         .route("/projects/:project/commits", get(history_handler))
         .route("/projects/:project/commits/:sha", get(commit_handler))
         .route("/projects/:project/diff/:base/:oid", get(diff_handler))
-        .route(
-            "/projects/:project/activity",
-            get(
-                activity_handler.layer(SetResponseHeaderLayer::if_not_present(
-                    header::CACHE_CONTROL,
-                    |response: &Response| {
-                        response
-                            .status()
-                            .is_success()
-                            .then_some(HeaderValue::from_static(CACHE_1_HOUR))
-                    },
-                )),
-            ),
-        )
+        .route("/projects/:project/activity", get(activity_handler))
         .route("/projects/:project/tree/:sha/", get(tree_handler_root))
         .route("/projects/:project/tree/:sha/*path", get(tree_handler))
         .route(
@@ -167,6 +152,92 @@ async fn project_root_handler(
         .collect::<Vec<_>>();
 
     Ok::<_, Error>(Json(infos))
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchQueryString {
+    pub q: Option<String>,
+    pub page: Option<usize>,
+    pub per_page: Option<usize>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SearchResult {
+    pub rid: RepoId,
+    #[serde(flatten)]
+    pub payload: Project,
+    pub delegates: NonEmpty<serde_json::Value>,
+    pub seeds: usize,
+    #[serde(skip)]
+    pub index: usize,
+}
+
+/// Search repositories by name.
+/// `GET /projects/search?q=<query>`
+///
+/// We obtain the byte index of the first character of the query that matches the repo name.
+/// And skip if the query doesn't match the repo name.
+///
+/// Sorting algorithm:
+/// If both byte indices are 0, compare by seeding count.
+/// A repo name with a byte index of 0 should come before non-zero indices.
+/// If both indices are non-zero and equal, then compare by seeding count.
+/// If none of the above, all non-zero indices are compared by their seeding count primarily.
+async fn project_search_handler(
+    State(ctx): State<Context>,
+    Query(qs): Query<SearchQueryString>,
+) -> impl IntoResponse {
+    let SearchQueryString { q, per_page, page } = qs;
+    let q = q.unwrap_or_default();
+    let page = page.unwrap_or(0);
+    let per_page = per_page.unwrap_or(10);
+    let storage = &ctx.profile.storage;
+    let aliases = &ctx.profile.aliases();
+    let db = &ctx.profile.database()?;
+    let mut found_repos = storage
+        .repositories()?
+        .into_iter()
+        .filter_map(|info| {
+            if info.doc.visibility.is_private() {
+                return None;
+            }
+            let payload = info.doc.project().ok()?;
+            let index = payload.name().find(&q)?;
+            let seeds = db.count(&info.rid).unwrap_or_default();
+            let delegates = info.doc.delegates.map(|did| match aliases.alias(&did) {
+                Some(alias) => json!({
+                    "id": did,
+                    "alias": alias,
+                }),
+                None => json!({
+                    "id": did,
+                }),
+            });
+
+            Some(SearchResult {
+                index,
+                seeds,
+                payload,
+                rid: info.rid,
+                delegates,
+            })
+        })
+        .collect::<Vec<_>>();
+    found_repos.sort_by(|a, b| match (a.index, b.index) {
+        (0, 0) => b.seeds.cmp(&a.seeds),
+        (0, _) => std::cmp::Ordering::Less,
+        (_, 0) => std::cmp::Ordering::Greater,
+        (ai, bi) if ai == bi => b.seeds.cmp(&a.seeds),
+        (_, _) => b.seeds.cmp(&a.seeds),
+    });
+    let found_repos = found_repos
+        .into_iter()
+        .skip(page * per_page)
+        .take(per_page)
+        .collect::<Vec<_>>();
+
+    Ok::<_, Error>(cached_response(found_repos, "600").into_response())
 }
 
 /// Get project metadata.
@@ -407,7 +478,7 @@ async fn activity_handler(
         })
         .collect::<Vec<i64>>();
 
-    Ok::<_, Error>((StatusCode::OK, Json(json!({ "activity": timestamps }))))
+    Ok::<_, Error>(cached_response(json!({ "activity": timestamps }), "3600"))
 }
 
 /// Get project source tree for '/' path.
@@ -1137,6 +1208,33 @@ mod routes {
                "id": RID,
                "seeding": 0,
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_search_projects() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = super::router(seed(tmp.path()));
+        let response = get(&app, format!("/projects/search?q=he")).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.json().await,
+            json!([
+              {
+                "rid": "rad:z4FucBZHZMCsxTyQE1dfE2YR59Qbp",
+                "name": "hello-world",
+                "description": "Rad repository for tests",
+                "defaultBranch": "master",
+                "delegates": [
+                  {
+                    "id": DID,
+                    "alias": CONTRIBUTOR_ALIAS,
+                  }
+                ],
+                "seeds": 0
+              }
+            ])
         );
     }
 
