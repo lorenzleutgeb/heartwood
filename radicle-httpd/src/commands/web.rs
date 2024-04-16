@@ -219,6 +219,14 @@ pub fn run(options: Options, ctx: impl term::Context) -> anyhow::Result<()> {
         }
     } else {
         term::info!("Visit {auth_url} to connect");
+        match arboard::Clipboard::new() {
+            Ok(mut ctx) => {
+                if let Ok(()) = ctx.set_text(auth_url.as_str()) {
+                    term::hint("URL has been copied to your clipboard");
+                }
+            }
+            Err(err) => term::error(err),
+        }
     }
 
     if let Some((runtime, httpd_handle)) = runtime_and_handle {

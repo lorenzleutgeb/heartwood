@@ -26,6 +26,7 @@ path = "src/bin/rad-web.rs"
 
 [dependencies]
 anyhow = { version = "1" }
+arboard = { version = "3.3.2" }
 axum = { version = "0.7.2", default-features = false, features = ["json", "query", "tokio", "http1"] }
 axum-auth = { version= "0.7.0", default-features = false, features = ["auth-bearer"] }
 axum-server = { version = "0.6.0", default-features = false }
