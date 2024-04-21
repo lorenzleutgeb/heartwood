@@ -8,6 +8,11 @@ authors = ["Alexis Sellier <alexis@radicle.xyz>"]
 edition = "2021"
 build = "build.rs"
 
+[package.metadata.binstall]
+pkg-url = "https://files.radicle.xyz/releases/latest/{target}/radicle-{target}{archive-suffix}"
+bin-dir = "radicle-{target}/{bin}{binary-ext}"
+pkg-fmt = "tgz"
+
 [[bin]]
 name = "rad"
 path = "src/main.rs"
