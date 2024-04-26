@@ -13,6 +13,7 @@ use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
+use std::sync::OnceLock;
 
 use anyhow::anyhow;
 use anyhow::Context as _;
@@ -35,6 +36,10 @@ pub const CONFIG_SIGNING_KEY: &str = "user.signingkey";
 pub const CONFIG_GPG_FORMAT: &str = "gpg.format";
 pub const CONFIG_GPG_SSH_PROGRAM: &str = "gpg.ssh.program";
 pub const CONFIG_GPG_SSH_ALLOWED_SIGNERS: &str = "gpg.ssh.allowedSignersFile";
+
+pub const CONFIG_ABBREV_DEFAULT: usize = 10;
+
+pub static CONFIG_ABBREV: OnceLock<usize> = OnceLock::new();
 
 /// Git revision parameter. Supports extended SHA-1 syntax.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,6 +336,61 @@ pub fn check_version() -> Result<Version, anyhow::Error> {
     Ok(git_version)
 }
 
+/// Gets git's local `core.abbrev` config for formatting,
+/// using the global config as a backup and defaults
+/// to "auto" if all else fails.
+/// Returns `CONFIG_ABBREV_DEFAULT` in the worst-case scenario.
+pub fn get_abbrev() -> usize {
+    match CONFIG_ABBREV.get() {
+        None => {
+            let config = if let Ok(repo) = repository() {
+                repo.config()
+            } else {
+                git2::Config::open_default()
+            };
+
+            let abbrev = if let Ok(cfg) = config {
+                if let Ok(entry) = cfg.get_entry("core.abbrev") {
+                    entry.value().unwrap_or("auto").to_string()
+                } else {
+                    String::from("auto")
+                }
+            } else {
+                String::from("auto")
+            };
+            match abbrev.trim() {
+                "auto" => {
+                    // Here, since there isn't an orthodox way to get auto's
+                    // true value (yet), we instead get git to do it for us.
+                    // The length of the revision is what we are looking for.
+                    let _ = CONFIG_ABBREV.set(
+                        git(Path::new("."), ["rev-parse", "--short", "HEAD"])
+                            .unwrap_or("a".repeat(CONFIG_ABBREV_DEFAULT))
+                            .trim()
+                            .len(),
+                    );
+                }
+                "no" => {
+                    let _ = CONFIG_ABBREV.set(40);
+                },
+                _ => {
+                    let _ = CONFIG_ABBREV.set(
+                        abbrev
+                            .parse::<usize>()
+                            .unwrap_or(CONFIG_ABBREV_DEFAULT)
+                            .clamp(4, 40),
+                    );
+                }
+            }
+
+            //SAFETY: We have already set CONFIG_ABBREV to a Some value. This should never
+            //change again.
+            *CONFIG_ABBREV.get().unwrap()
+        }
+        Some(x) => *x,
+    }
+}
+
 /// Parse a remote refspec into a peer id and ref.
 pub fn parse_remote(refspec: &str) -> Option<(NodeId, &str)> {
     refspec
@@ -348,9 +408,9 @@ pub fn view_diff(
     let workdir = repo
         .workdir()
         .ok_or_else(|| anyhow!("Could not get workdir current repository."))?;
-
-    let left = format!("{:.7}", left.to_string());
-    let right = format!("{:.7}", right.to_string());
+    let abbrev = get_abbrev();
+    let left = format!("{:.abbrev$}", left.to_string());
+    let right = format!("{:.abbrev$}", right.to_string());
 
     let mut git = Command::new("git")
         .current_dir(workdir)
