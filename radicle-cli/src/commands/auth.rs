@@ -228,7 +228,7 @@ pub fn register(
                 e.into()
             }
         })?
-        .ok_or_else(|| anyhow!("Key not found in {:?}", profile.keystore.path()))?;
+        .ok_or_else(|| anyhow!("Key not found in {:?}", profile.keystore.secret_key_path()))?;
 
     agent.register(&secret)?;
 

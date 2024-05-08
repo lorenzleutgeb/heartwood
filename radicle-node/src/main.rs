@@ -7,6 +7,7 @@ use crossbeam_channel as chan;
 use radicle::logger;
 use radicle::prelude::Signer;
 use radicle::profile;
+use radicle::keys::Config as Keys;
 use radicle::version::Version;
 use radicle_node::crypto::ssh::keystore::{Keystore, MemorySigner};
 use radicle_node::Runtime;
@@ -27,9 +28,16 @@ Usage
    If you're running a public seed node, make sure to use `--listen` to bind a listening socket to
    eg. `0.0.0.0:8776`, and add your external addresses in your configuration.
 
+   The options `--[public|secret]-key` override values from the config file and allow for more
+   flexibility for configuring seed nodes.
+
 Options
 
     --config             <path>         Config file to use (default ~/.radicle/config.json)
+    --secret-key         <path>         Secret key to use (default ~/.radicle/keys/radicle)
+                                        (must be combined with --public-key)
+    --public-key         <path>         Public key to use (default ~/.radicle/keys/radicle.pub)
+                                        (must be combined with --secret-key)
     --force                             Force start even if an existing control socket is found
     --listen             <address>      Address to listen on
     --log                <level>        Set log level (default: info)
@@ -40,6 +48,7 @@ Options
 #[derive(Debug)]
 struct Options {
     config: Option<PathBuf>,
+    keys: Option<Keys>,
     listen: Vec<net::SocketAddr>,
     log: Option<log::Level>,
     force: bool,
@@ -52,6 +61,8 @@ impl Options {
         let mut parser = lexopt::Parser::from_env();
         let mut listen = Vec::new();
         let mut config = None;
+        let mut public_key = None;
+        let mut secret_key = None;
         let mut force = false;
         let mut log = None;
 
@@ -64,6 +75,16 @@ impl Options {
                     let value = parser.value()?;
                     let path = PathBuf::from(value);
                     config = Some(path);
+                }
+                Long("public-key") => {
+                    let value = parser.value()?;
+                    let path = PathBuf::from(value);
+                    public_key = Some(path);
+                }
+                Long("secret-key") => {
+                    let value = parser.value()?;
+                    let path = PathBuf::from(value);
+                    secret_key = Some(path);
                 }
                 Long("listen") => {
                     let addr = parser.value()?.parse()?;
@@ -84,11 +105,18 @@ impl Options {
             }
         }
 
+        let keys = match (secret_key, public_key) {
+            (None, None) => None,
+            (Some(secret), Some(public)) => Some(Keys { secret, public }),
+            _ => anyhow::bail!("specify either both --secret-key and --public-key or neither"),
+        };
+
         Ok(Self {
             force,
             listen,
             log,
             config,
+            keys,
         })
     }
 }
@@ -97,7 +125,7 @@ fn execute() -> anyhow::Result<()> {
     let home = profile::home()?;
     let options = Options::from_env()?;
     let config = options.config.unwrap_or_else(|| home.config());
-    let mut config = profile::Config::load(&config)?;
+    let mut config = profile::Config::load(&config, &home)?;
 
     logger::init(options.log.unwrap_or(config.node.log))?;
 
@@ -106,7 +134,8 @@ fn execute() -> anyhow::Result<()> {
     log::info!(target: "node", "Unlocking node keystore..");
 
     let passphrase = profile::env::passphrase();
-    let keystore = Keystore::new(&home.keys());
+    let keys = options.keys.as_ref().unwrap_or_else(|| &config.keys);
+    let keystore = Keystore::new(&keys.secret, &keys.public);
     let signer = MemorySigner::load(&keystore, passphrase).context("couldn't load secret key")?;
 
     log::info!(target: "node", "Node ID is {}", signer.public_key());

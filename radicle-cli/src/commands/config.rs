@@ -120,7 +120,7 @@ pub fn run(options: Options, ctx: impl term::Context) -> anyhow::Result<()> {
                 options.alias.ok_or(anyhow!(
                     "an alias must be provided to initialize a new configuration"
                 ))?,
-                &path,
+                &ctx.profile()?.home(),
             )?;
             term::success!(
                 "Initialized new Radicle configuration at {}",

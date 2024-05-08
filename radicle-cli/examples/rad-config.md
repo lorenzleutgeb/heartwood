@@ -17,6 +17,10 @@ $ rad config
   "cli": {
     "hints": true
   },
+  "keys": {
+    "secret": "[..]/home/alice/.radicle/keys/radicle",
+    "public": "[..]/home/alice/.radicle/keys/radicle.pub"
+  },
   "node": {
     "alias": "alice",
     "listen": [],

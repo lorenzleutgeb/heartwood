@@ -44,7 +44,8 @@ pub const CONTRIBUTOR_PATCH_ID: &str = "3e3f0dc34b3eeb64cfbc7218fbd52b97246e0564
 /// Create a new profile.
 pub fn profile(home: &Path, seed: [u8; 32]) -> radicle::Profile {
     let home = Home::new(home).unwrap();
-    let keystore = Keystore::new(&home.keys());
+    let keys = home.default_keys();
+    let keystore = Keystore::new(&keys.secret, &keys.public);
     let keypair = KeyPair::from_seed(Seed::from(seed));
     let alias = node::Alias::new("seed");
     let storage = Storage::open(
@@ -62,12 +63,14 @@ pub fn profile(home: &Path, seed: [u8; 32]) -> radicle::Profile {
     radicle::storage::git::transport::local::register(storage.clone());
     keystore.store(keypair.clone(), "radicle", None).unwrap();
 
+    let config = profile::Config::new(alias, &home);
+
     radicle::Profile {
         home,
         storage,
         keystore,
         public_key: keypair.pk.into(),
-        config: profile::Config::new(alias),
+        config,
     }
 }
 

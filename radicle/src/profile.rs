@@ -10,6 +10,8 @@
 //!     node/
 //!       control.sock                           # Node control socket
 //!
+//! Note that `keys/radicle{,.pub}` as shown above is only the default
+//! value, and can be configured via [`Config::keys`].
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
@@ -28,7 +30,11 @@ use crate::prelude::NodeId;
 use crate::storage::git::transport;
 use crate::storage::git::Storage;
 use crate::storage::{self, ReadRepository};
-use crate::{cli, cob, git, node, web};
+use crate::{cli, cob, git, keys, node, web};
+
+pub const DOT_RADICLE: &str = ".radicle";
+pub const DEFAULT_SECRET_KEY_FILE_NAME: &str = "radicle";
+pub const DEFAULT_PUBLIC_KEY_FILE_NAME: &str = "radicle.pub";
 
 /// Environment variables used by radicle.
 pub mod env {
@@ -182,12 +188,15 @@ pub enum ConfigError {
     Io(PathBuf, io::Error),
     #[error("failed to load configuration from {0}: {1}")]
     Load(PathBuf, serde_json::Error),
+    #[error("configuration {0} does not exist")]
+    NotFound(PathBuf),
 }
 
-/// Local radicle configuration.
+/// A configuration with holes for fields that are populated
+/// by configuration loading.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Config {
+pub struct RawConfig<Keys> {
     /// Public explorer. This is used for generating links.
     #[serde(default)]
     pub public_explorer: Explorer,
@@ -201,13 +210,18 @@ pub struct Config {
     /// CLI configuration.
     #[serde(default)]
     pub cli: cli::Config,
+    /// Locations of secret and public key, representing the identity.
+    pub keys: Keys,
     /// Node configuration.
     pub node: node::Config,
 }
 
+/// Local radicle configuration.
+pub type Config = RawConfig<keys::Config>;
+
 impl Config {
     /// Create a new, default configuration.
-    pub fn new(alias: Alias) -> Self {
+    pub fn new(alias: Alias, home: &Home) -> Self {
         let node = node::Config::new(alias);
 
         Self {
@@ -215,26 +229,46 @@ impl Config {
             preferred_seeds: node.network.public_seeds(),
             web: web::Config::default(),
             cli: cli::Config::default(),
+            keys: home.default_keys(),
             node,
         }
     }
 
     /// Initialize a new configuration. Fails if the path already exists.
-    pub fn init(alias: Alias, path: &Path) -> io::Result<Self> {
-        let cfg = Config::new(alias);
-        cfg.write(path)?;
+    pub fn init(alias: Alias, home: &Home) -> io::Result<Self> {
+        let cfg = Config::new(alias, home);
+        cfg.write(home.config().as_path())?;
 
         Ok(cfg)
     }
 
     /// Load a configuration from the given path.
-    pub fn load(path: &Path) -> Result<Self, ConfigError> {
+    fn load_raw(path: &Path) -> Result<RawConfig<Option<keys::Config>>, ConfigError> {
         match fs::File::open(path) {
             Ok(cfg) => {
                 serde_json::from_reader(cfg).map_err(|e| ConfigError::Load(path.to_path_buf(), e))
             }
-            Err(e) => Err(ConfigError::Io(path.to_path_buf(), e)),
+            Err(e) => {
+                if e.kind() == io::ErrorKind::NotFound {
+                    Err(ConfigError::NotFound(path.to_path_buf()))
+                } else {
+                    Err(ConfigError::Io(path.to_path_buf(), e))
+                }
+            }
         }
+    }
+
+    pub fn load(path: &Path, home: &Home) -> Result<Self, Error> {
+        let config = Self::load_raw(path)?;
+
+        Ok(Config {
+            public_explorer: config.public_explorer,
+            preferred_seeds: config.preferred_seeds,
+            web: config.web,
+            cli: config.cli,
+            keys: config.keys.unwrap_or_else(|| home.default_keys()),
+            node: config.node,
+        })
     }
 
     /// Write configuration to disk.
@@ -275,9 +309,9 @@ impl Profile {
         passphrase: Option<Passphrase>,
         seed: crypto::Seed,
     ) -> Result<Self, Error> {
-        let keystore = Keystore::new(&home.keys());
+        let config = Config::init(alias.clone(), &home)?;
+        let keystore = Keystore::new(&config.keys.secret, &config.keys.public);
         let public_key = keystore.init("radicle", passphrase, seed)?;
-        let config = Config::init(alias.clone(), home.config().as_path())?;
         let storage = Storage::open(
             home.storage(),
             git::UserInfo {
@@ -303,11 +337,11 @@ impl Profile {
 
     pub fn load() -> Result<Self, Error> {
         let home = self::home()?;
-        let keystore = Keystore::new(&home.keys());
+        let config = Config::load(home.config().as_path(), &home)?;
+        let keystore = Keystore::new(&config.keys.secret, &config.keys.public);
         let public_key = keystore
             .public_key()?
-            .ok_or_else(|| Error::NotFound(home.path().to_path_buf()))?;
-        let config = Config::load(home.config().as_path())?;
+            .ok_or_else(|| Error::NotFound(keystore.public_key_path().to_path_buf()))?;
         let storage = Storage::open(
             home.storage(),
             git::UserInfo {
@@ -441,7 +475,7 @@ pub fn home() -> Result<Home, io::Error> {
     if let Some(home) = env::var_os(env::RAD_HOME) {
         Ok(Home::new(PathBuf::from(home))?)
     } else if let Some(home) = env::var_os("HOME") {
-        Ok(Home::new(PathBuf::from(home).join(".radicle"))?)
+        Ok(Home::new(PathBuf::from(home).join(DOT_RADICLE))?)
     } else {
         Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -485,7 +519,7 @@ impl Home {
             path: path.canonicalize()?,
         };
 
-        for dir in &[home.storage(), home.keys(), home.node(), home.cobs()] {
+        for dir in &[home.storage(), home.node(), home.cobs()] {
             if !dir.exists() {
                 fs::create_dir_all(dir)?;
             }
@@ -506,8 +540,12 @@ impl Home {
         self.path.join("config.json")
     }
 
-    pub fn keys(&self) -> PathBuf {
-        self.path.join("keys")
+    pub fn default_keys(&self) -> keys::Config {
+        let keys = self.path().join("keys");
+        keys::Config {
+            secret: keys.join(DEFAULT_SECRET_KEY_FILE_NAME),
+            public: keys.join(DEFAULT_PUBLIC_KEY_FILE_NAME),
+        }
     }
 
     pub fn node(&self) -> PathBuf {

@@ -80,6 +80,7 @@ mod routes {
                 "cli": {
                   "hints": true
                 },
+                "keys": seed.profile.home().default_keys(),
                 "node": {
                   "alias": "seed",
                   "listen": [],
