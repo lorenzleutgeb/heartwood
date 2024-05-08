@@ -3,7 +3,7 @@ use std::io;
 
 use libc::{getrlimit, rlimit, setrlimit, RLIMIT_NOFILE};
 
-#[cfg(target_family = "unix")]
+#[cfg(not(target_os = "freebsd"))]
 /// Sets the open file limit to the given value, or the maximum allowed value.
 pub fn set_file_limit<N>(n: N) -> io::Result<u64>
 where
@@ -39,15 +39,15 @@ where
     Ok(rlim.rlim_cur)
 }
 
-// N.b. windows uses i64 instead of u64
-#[cfg(target_family = "windows")]
+// FreeBSD uses i64 instead of u64
+#[cfg(target_os = "freebsd")]
 /// Sets the open file limit to the given value, or the maximum allowed value.
 pub fn set_file_limit<N>(n: N) -> io::Result<i64>
 where
     N: Copy + fmt::Display,
     i64: TryFrom<N>,
 {
-    let Ok(n) = u64::try_from(n) else {
+    let Ok(n) = i64::try_from(n) else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("expected value that fits into i64, found: {n}"),
