@@ -4,10 +4,11 @@ use std::{env, fs, net, path::PathBuf, process};
 use anyhow::Context;
 use crossbeam_channel as chan;
 
+use radicle::keys::Config as Keys;
 use radicle::logger;
 use radicle::prelude::Signer;
 use radicle::profile;
-use radicle::keys::Config as Keys;
+use radicle::profile::{Fingerprint, FingerprintVerification};
 use radicle::version::Version;
 use radicle_node::crypto::ssh::keystore::{Keystore, MemorySigner};
 use radicle_node::Runtime;
@@ -136,8 +137,22 @@ fn execute() -> anyhow::Result<()> {
     let passphrase = profile::env::passphrase();
     let keys = options.keys.as_ref().unwrap_or_else(|| &config.keys);
     let keystore = Keystore::new(&keys.secret, &keys.public);
-    let signer = MemorySigner::load(&keystore, passphrase).context("couldn't load secret key")?;
 
+    match profile::Fingerprint::read(&home)? {
+        Some(fp) => {
+            if fp.verify(&keystore)? != FingerprintVerification::Match {
+                anyhow::bail!(
+                    "Fingerprint mismatch. Expected '{}' to have fingerprint '{}' (read from '{}'), which is not the case. Refusing operation.",
+                    keys.public.display(), fp, home.fingerprint().display()
+                )
+            }
+        }
+        None => {
+            Fingerprint::init(&home, &keystore)?;
+        }
+    }
+
+    let signer = MemorySigner::load(&keystore, passphrase).context("couldn't load secret key")?;
     log::info!(target: "node", "Node ID is {}", signer.public_key());
 
     // Add the preferred seeds as persistent peers so that we reconnect to them automatically.

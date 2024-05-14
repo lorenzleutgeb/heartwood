@@ -180,6 +180,8 @@ pub enum Error {
     CobsCache(#[from] cob::cache::Error),
     #[error(transparent)]
     Storage(#[from] storage::Error),
+    #[error(transparent)]
+    Encoding(#[from] std::str::Utf8Error),
 }
 
 #[derive(Debug, Error)]
@@ -290,6 +292,61 @@ impl Config {
     /// Get the user alias.
     pub fn alias(&self) -> &Alias {
         &self.node.alias
+    }
+}
+
+/// Fingerprint of a public key.
+#[derive(Debug)]
+pub struct Fingerprint(String);
+
+impl std::fmt::Display for Fingerprint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum FingerprintVerification {
+    Match,
+    Mismatch,
+}
+
+impl Fingerprint {
+    /// Return fingerprint of the node, if it exists.
+    pub fn read(home: &Home) -> Result<Option<Fingerprint>, Error> {
+        match fs::read(home.fingerprint()) {
+            Ok(contents) => Ok(Some(Fingerprint(
+                String::from(std::str::from_utf8(contents.as_ref())?)
+                    .trim_end()
+                    .to_string(),
+            ))),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(Error::Io(err)),
+        }
+    }
+
+    pub fn init(home: &Home, keystore: &Keystore) -> Result<(), Error> {
+        let public_key = &Self::public_key(keystore)?;
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(home.fingerprint())?;
+        file.write_all(radicle_crypto::ssh::fmt::fingerprint(public_key).as_ref())?;
+        Ok(())
+    }
+
+    pub fn verify(&self, keystore: &Keystore) -> Result<FingerprintVerification, Error> {
+        if radicle_crypto::ssh::fmt::fingerprint(&Self::public_key(keystore)?) == self.0 {
+            Ok(FingerprintVerification::Match)
+        } else {
+            Ok(FingerprintVerification::Mismatch)
+        }
+    }
+
+    fn public_key(keystore: &Keystore) -> Result<PublicKey, Error> {
+        keystore
+            .public_key()?
+            .ok_or_else(|| Error::NotFound(keystore.public_key_path().to_path_buf()))
     }
 }
 
@@ -594,6 +651,11 @@ impl Home {
         let db = node::Database::open(path)?;
 
         Ok(db)
+    }
+
+    /// Return the location of the node fingerprint.
+    pub fn fingerprint(&self) -> PathBuf {
+        self.node().join(node::NODE_FINGERPRINT_FILE)
     }
 
     /// Return a read-only handle for the issues cache.
