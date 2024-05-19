@@ -15,6 +15,7 @@ members = [
   "radicle-ssh",
   "radicle-tools",
   "radicle-signals",
+  "radicle-systemd",
 ]
 default-members = [
   "radicle",
@@ -27,6 +28,7 @@ default-members = [
   "radicle-remote-helper",
   "radicle-term",
   "radicle-signals",
+  "radicle-systemd",
 ]
 resolver = "2"
 
