@@ -1,0 +1,10 @@
+#! /usr/bin/env -S jq --from-file
+
+reduce
+    (if has("actions") then .actions[] else inputs end)
+as {"+": $p, "-": $m} (
+    {};
+    .[$p // $m // ("invalid" | halt_error)] |= (
+        [. + (if $p then 1 else -1 end), 0] | max
+    )
+)

@@ -2482,6 +2482,7 @@ dependencies = [
  "radicle-surf",
  "radicle-term",
  "serde",
+ "serde-jsonlines",
  "serde_json",
  "shlex",
  "tempfile",
@@ -2984,6 +2985,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9846a40c979031340571da2545a4e5b7c4163bdae79b301d5f86d03979451fcc"
 dependencies = [
  "serde_derive",
+]
+
+[[package]]
+name = "serde-jsonlines"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e228faf5f94badfe42723177b62cfb9b187351994cb4e852cd4a6a4c96dbeea8"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

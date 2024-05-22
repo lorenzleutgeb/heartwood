@@ -181,6 +181,21 @@ where
         embeds: Vec<Embed>,
         signer: &G,
     ) -> Result<(ObjectId, T), Error> {
+        self.create_raw(T::type_name(), message, actions, embeds, signer)
+    }
+
+    /// Create an object using given type name.
+    /// TODO(lorenzleutgeb): This is an ad-hoc hack around the limitiation
+    /// [`Self::create`] not taking a type name but requiring it to be static.
+    /// Figure out a better way to do this...
+    pub fn create_raw<G: Signer>(
+        &self,
+        type_name: &TypeName,
+        message: &str,
+        actions: impl Into<NonEmpty<T::Action>>,
+        embeds: Vec<Embed>,
+        signer: &G,
+    ) -> Result<(ObjectId, T), Error> {
         let actions = actions.into();
         let parents = actions.iter().flat_map(T::Action::parents).collect();
         let contents = actions.try_map(encoding::encode)?;
@@ -191,7 +206,7 @@ where
             parents,
             signer.public_key(),
             Create {
-                type_name: T::type_name().clone(),
+                type_name: type_name.clone(),
                 version: Version::default(),
                 message: message.to_owned(),
                 embeds,

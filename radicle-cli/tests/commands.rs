@@ -156,6 +156,34 @@ fn rad_issue() {
 }
 
 #[test]
+fn rad_cob_create() {
+    let mut environment = Environment::new();
+    let profile = environment.profile(config::profile("alice"));
+    let home = &profile.home;
+    let working = environment.tmp().join("working");
+
+    let base = Path::new(env!("CARGO_MANIFEST_DIR"));
+    std::fs::create_dir_all(base).unwrap();
+    std::fs::create_dir_all(working.clone()).unwrap();
+    std::fs::copy(
+        base.join("examples").join("groceries.jsonl"),
+        working.join("groceries.jsonl"),
+    )
+    .unwrap();
+    std::fs::copy(
+        base.join("examples").join("rad-cob-multiset"),
+        working.join("rad-cob-multiset"),
+    )
+    .unwrap();
+
+    // Setup a test repository.
+    fixtures::repository(&working);
+
+    test("examples/rad-init.md", &working, Some(home), []).unwrap();
+    test("examples/rad-cob-create.md", &working, Some(home), []).unwrap();
+}
+
+#[test]
 fn rad_cob_log() {
     let mut environment = Environment::new();
     let profile = environment.profile(config::profile("alice"));

@@ -207,6 +207,17 @@ impl Embed<Vec<u8>> {
             content: T::from(self.oid()),
         }
     }
+
+    /// Return an embed from a file.
+    pub fn file<P: AsRef<std::path::Path>>(
+        name: String,
+        path: P,
+    ) -> std::io::Result<Embed<Vec<u8>>> {
+        Ok(Embed {
+            name: name.clone(),
+            content: std::fs::read(path)?,
+        })
+    }
 }
 
 impl Embed<Oid> {

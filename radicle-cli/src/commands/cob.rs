@@ -1,18 +1,25 @@
 use std::ffi::OsString;
+use std::fs::File;
+use std::io::BufReader;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use anyhow::anyhow;
 use chrono::prelude::*;
 use nonempty::NonEmpty;
 use radicle::cob;
+use radicle::cob::helper::Helper;
+
 use radicle::cob::Op;
 use radicle::identity::Identity;
 use radicle::issue::cache::Issues;
 use radicle::patch::cache::Patches;
+use radicle::patch::Patch;
 use radicle::prelude::RepoId;
-use radicle::storage::ReadStorage;
+use radicle::storage::{ReadStorage, WriteStorage};
 use radicle_cob::object::collaboration::list;
 use serde_json::json;
+use serde_jsonlines::JsonLinesReader;
 
 use crate::git::Rev;
 use crate::terminal as term;
@@ -26,12 +33,16 @@ pub const HELP: Help = Help {
 Usage
 
     rad cob <command> [<option>...]
-    rad cob list  --repo <rid> --type <typename>
-    rad cob log   --repo <rid> --type <typename> --object <oid> [<option>...]
-    rad cob show  --repo <rid> --type <typename> --object <oid> [<option>...]
+    rad cob act    --repo <rid> --type <typename> --object <oid> [<option>...]
+    rad cob create --repo <rid> --type <typename> <filename>     [<option>...]
+    rad cob list   --repo <rid> --type <typename>
+    rad cob log    --repo <rid> --type <typename> --object <oid> [<option>...]
+    rad cob show   --repo <rid> --type <typename> --object <oid> [<option>...]
 
 Commands
 
+    act                        Add actions to a COB
+    create                     Create a new COB of a given type given initial actions
     list                       List all COBs of a given type (--object is not needed)
     log                        Print a log of all raw operations on a COB
 
@@ -39,7 +50,7 @@ Log options
 
     --format (pretty | json)   Desired output format (default: pretty)
 
-Show options
+Act, New, Show options
 
     --format json              Desired output format (default: json)
 
@@ -49,16 +60,37 @@ Other options
 "#,
 };
 
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 enum OperationName {
+    Act,
+    Create,
     List,
     Log,
     Show,
 }
 
+enum EmbedContent {
+    Path(PathBuf),
+    Hash(Rev),
+}
+
+struct Embed {
+    name: String,
+    content: EmbedContent,
+}
+
 enum Operation {
+    Act(Rev),
+    Create {
+        message: String,
+        actions: PathBuf,
+        embeds: Vec<Embed>,
+    },
     List,
-    Log(Rev),
+    Log {
+        oid: Rev,
+        format: Format,
+    },
     Show(Rev),
 }
 
@@ -71,82 +103,123 @@ pub struct Options {
     rid: RepoId,
     op: Operation,
     type_name: cob::TypeName,
-    format: Format,
 }
 
 impl Args for Options {
     fn from_args(args: Vec<OsString>) -> anyhow::Result<(Self, Vec<OsString>)> {
         use lexopt::prelude::*;
+        use OperationName::*;
 
         let mut parser = lexopt::Parser::from_args(args);
-        let mut op: Option<OperationName> = None;
+
+        let op = match parser.next()? {
+            None | Some(Long("help") | Short('h')) => {
+                return Err(Error::Help.into());
+            }
+            Some(Value(val)) => match val.to_string_lossy().as_ref() {
+                "act" => Act,
+                "create" => Create,
+                "list" => List,
+                "log" => Log,
+                "show" => Show,
+                unknown => anyhow::bail!("unknown operation '{unknown}'"),
+            },
+            Some(arg) => return Err(anyhow::anyhow!(arg.unexpected())),
+        };
+
         let mut type_name: Option<cob::TypeName> = None;
         let mut oid: Option<Rev> = None;
         let mut rid: Option<RepoId> = None;
-        let mut format: Option<Format> = None;
+        let mut format: Format = Format::Pretty;
+        let mut message: Option<String> = None;
+        let mut embed_name: Option<String> = None;
+        let mut embeds: Vec<Embed> = vec![];
+        let mut actions: Option<PathBuf> = None;
 
         while let Some(arg) = parser.next()? {
-            match arg {
-                Value(val) if op.is_none() => match val.to_string_lossy().as_ref() {
-                    "list" => op = Some(OperationName::List),
-                    "log" => op = Some(OperationName::Log),
-                    "show" => op = Some(OperationName::Show),
-                    unknown => anyhow::bail!("unknown operation '{unknown}'"),
-                },
-                Long("type") | Short('t') => {
-                    let v = parser.value()?;
-                    let v = term::args::string(&v);
-                    let v = cob::TypeName::from_str(&v)?;
-
-                    type_name = Some(v);
-                }
-                Long("object") => {
-                    let v = parser.value()?;
-                    let v = term::args::string(&v);
-
-                    oid = Some(Rev::from(v));
-                }
-                Long("repo") => {
-                    let v = parser.value()?;
-                    let v = term::args::rid(&v)?;
-
-                    rid = Some(v);
-                }
-                Long("help") | Short('h') => {
+            match (&op, &arg) {
+                (_, Long("help") | Short('h')) => {
                     return Err(Error::Help.into());
                 }
-                Long("format")
-                    if op == Some(OperationName::Log) || op == Some(OperationName::Show) =>
-                {
-                    let v: String = term::args::string(&parser.value()?);
-                    match v.as_ref() {
-                        "pretty" if op == Some(OperationName::Log) => format = Some(Format::Pretty),
-                        "json" => format = Some(Format::Json),
-                        unknown => anyhow::bail!("unknown format '{unknown}'"),
-                    }
+                (_, Long("repo") | Short('r')) => {
+                    rid = Some(term::args::rid(&parser.value()?)?);
+                }
+                (_, Long("type") | Short('t')) => {
+                    let v = term::args::string(&parser.value()?);
+                    type_name = Some(cob::TypeName::from_str(&v)?);
+                }
+                (Act | Log | Show, Long("object") | Short('o')) => {
+                    let v = term::args::string(&parser.value()?);
+                    oid = Some(Rev::from(v));
+                }
+                (Act | Create, Long("message") | Short('m')) => {
+                    message = Some(term::args::string(&parser.value()?));
+                }
+                (Log | Show, Long("format")) => {
+                    format = match (op, term::args::string(&parser.value()?).as_ref()) {
+                        (Show, "pretty") => Format::Pretty,
+                        (_, "json") => Format::Json,
+                        (_, unknown) => anyhow::bail!("unknown format '{unknown}'"),
+                    };
+                }
+                (Act | Create, Long("embed-name")) if embed_name.is_none() => {
+                    embed_name = Some(term::args::string(&parser.value()?));
+                }
+                (Act | Create, Long("embed-content-hash")) if embed_name.is_some() => {
+                    embeds.push(Embed {
+                        name: embed_name.unwrap(),
+                        content: EmbedContent::Hash(Rev::from(term::args::string(
+                            &parser.value()?,
+                        ))),
+                    });
+                    embed_name = None;
+                }
+                (Act | Create, Long("embed-content-file")) if embed_name.is_some() => {
+                    embeds.push(Embed {
+                        name: embed_name.unwrap(),
+                        content: EmbedContent::Path(PathBuf::from(&parser.value()?)),
+                    });
+                    embed_name = None;
+                }
+                (Act | Create, Value(val)) => {
+                    actions = Some(PathBuf::from(term::args::string(&val)));
                 }
                 _ => return Err(anyhow::anyhow!(arg.unexpected())),
             }
         }
 
+        if op != Create && op != List && oid.is_none() {
+            anyhow::bail!("an object id must be specified with `--object`")
+        } else if let Some(name) = embed_name {
+            anyhow::bail!("content for embed with name '{name}' must be specified")
+        }
+
         Ok((
             Options {
                 op: {
-                    match op.ok_or_else(|| anyhow!("a command must be specified"))? {
-                        OperationName::List => Operation::List,
-                        OperationName::Log => Operation::Log(oid.ok_or_else(|| {
-                            anyhow!("an object id must be specified with `--object`")
-                        })?),
-                        OperationName::Show => Operation::Show(oid.ok_or_else(|| {
-                            anyhow!("an object id must be specified with `--object`")
-                        })?),
+                    match op {
+                        Act => Operation::Act(oid.unwrap()),
+                        Create => Operation::Create {
+                            message: message.ok_or_else(|| {
+                                anyhow!("a message must be specified with `--message`")
+                            })?,
+                            actions: actions.ok_or_else(|| {
+                                anyhow!("a file containing initial actions must be specified")
+                            })?,
+                            embeds,
+                        },
+                        List => Operation::List,
+                        Log => Operation::Log {
+                            oid: oid.unwrap(),
+                            format,
+                        },
+                        Show => Operation::Show(oid.unwrap()),
                     }
                 },
                 rid: rid
                     .ok_or_else(|| anyhow!("a repository id must be specified with `--repo`"))?,
                 type_name: type_name
                     .ok_or_else(|| anyhow!("an object type must be specified with `--type`"))?,
-                format: format.unwrap_or(Format::Pretty),
             },
             vec![],
         ))
@@ -154,23 +227,79 @@ impl Args for Options {
 }
 
 pub fn run(options: Options, ctx: impl term::Context) -> anyhow::Result<()> {
-    let profile = ctx.profile()?;
+    let Options { rid, op, type_name } = options;
+    let profile: radicle::Profile = ctx.profile()?;
     let storage = &profile.storage;
-    let repo = storage.repository(options.rid)?;
+    let repo = storage.repository(rid)?;
 
-    match options.op {
+    match op {
+        Operation::Act(_oid) => {
+            todo!();
+        }
+        Operation::Create {
+            message,
+            embeds: _,
+            actions,
+        } => {
+            let repo = storage.repository_mut(rid)?;
+            let reader = JsonLinesReader::new(BufReader::new(File::open(actions)?));
+
+            // TODO(lorenzleutgeb): Handle embeds.
+
+            if type_name == cob::patch::TYPENAME.clone() {
+                let store: cob::store::Store<Patch, _> = cob::store::Store::open(&repo)?;
+                let actions = reader
+                    .read_all::<radicle::cob::patch::Action>()
+                    .collect::<std::io::Result<Vec<_>>>()?;
+                let actions = NonEmpty::from_vec(actions)
+                    .ok_or_else(|| anyhow::anyhow!("at least one action is required"))?;
+                let (oid, _) = store.create(&message, actions, vec![], &profile.signer()?)?;
+                println!("{}", oid)
+            } else if type_name == cob::issue::TYPENAME.clone() {
+                let store: cob::store::Store<cob::issue::Issue, _> =
+                    cob::store::Store::open(&repo)?;
+                let actions = reader
+                    .read_all::<radicle::cob::issue::Action>()
+                    .collect::<std::io::Result<Vec<_>>>()?;
+                let actions = NonEmpty::from_vec(actions)
+                    .ok_or_else(|| anyhow::anyhow!("at least one action is required"))?;
+                let (oid, _) = store.create(&message, actions, vec![], &profile.signer()?)?;
+                println!("{}", oid)
+            } else if type_name == cob::identity::TYPENAME.clone() {
+                let store: cob::store::Store<radicle::cob::identity::Identity, _> =
+                    cob::store::Store::open(&repo)?;
+                let actions = reader
+                    .read_all::<radicle::cob::identity::Action>()
+                    .collect::<std::io::Result<Vec<_>>>()?;
+                let actions = NonEmpty::from_vec(actions)
+                    .ok_or_else(|| anyhow::anyhow!("at least one action is required"))?;
+                let (oid, _) = store.create(&message, actions, vec![], &profile.signer()?)?;
+                println!("{}", oid)
+            } else {
+                let store: cob::store::Store<radicle::cob::helper::Helper, _> =
+                    cob::store::Store::open(&repo)?;
+                let actions = reader
+                    .read_all::<radicle::cob::helper::Action>()
+                    .collect::<std::io::Result<Vec<_>>>()?;
+                let actions = NonEmpty::from_vec(actions)
+                    .ok_or_else(|| anyhow::anyhow!("at least one action is required"))?;
+                let (oid, _) =
+                    store.create_raw(&type_name, &message, actions, vec![], &profile.signer()?)?;
+                println!("{}", oid)
+            }
+        }
         Operation::List => {
-            let cobs = list::<NonEmpty<cob::Entry>, _>(&repo, &options.type_name)?;
+            let cobs = list::<NonEmpty<cob::Entry>, _>(&repo, &type_name)?;
             for cob in cobs {
                 println!("{}", cob.id);
             }
         }
-        Operation::Log(oid) => {
+        Operation::Log { oid, format } => {
             let oid = oid.resolve(&repo.backend)?;
-            let ops = cob::store::ops(&oid, &options.type_name, &repo)?;
+            let ops = cob::store::ops(&oid, &type_name, &repo)?;
 
             for op in ops.into_iter().rev() {
-                match options.format {
+                match format {
                     Format::Json => print_op_json(op)?,
                     Format::Pretty => print_op_pretty(op)?,
                 }
@@ -179,25 +308,28 @@ pub fn run(options: Options, ctx: impl term::Context) -> anyhow::Result<()> {
         Operation::Show(oid) => {
             let oid = &oid.resolve(&repo.backend)?;
 
-            if options.type_name == cob::patch::TYPENAME.clone() {
+            if type_name == cob::patch::TYPENAME.clone() {
                 let patches = profile.patches(&repo)?;
                 let Some(patch) = patches.get(oid)? else {
-                    anyhow::bail!(cob::store::Error::NotFound(options.type_name, *oid))
+                    anyhow::bail!(cob::store::Error::NotFound(type_name, *oid))
                 };
                 serde_json::to_writer_pretty(std::io::stdout(), &patch)?
-            } else if options.type_name == cob::issue::TYPENAME.clone() {
+            } else if type_name == cob::issue::TYPENAME.clone() {
                 let issues = profile.issues(&repo)?;
                 let Some(issue) = issues.get(oid)? else {
-                    anyhow::bail!(cob::store::Error::NotFound(options.type_name, *oid))
+                    anyhow::bail!(cob::store::Error::NotFound(type_name, *oid))
                 };
                 serde_json::to_writer_pretty(std::io::stdout(), &issue)?
-            } else if options.type_name == cob::identity::TYPENAME.clone() {
-                let Some(cob) = cob::get::<Identity, _>(&repo, &options.type_name, oid)? else {
-                    anyhow::bail!(cob::store::Error::NotFound(options.type_name, *oid))
+            } else if type_name == cob::identity::TYPENAME.clone() {
+                let Some(cob) = cob::get::<Identity, _>(&repo, &type_name, oid)? else {
+                    anyhow::bail!(cob::store::Error::NotFound(type_name, *oid))
                 };
                 serde_json::to_writer_pretty(std::io::stdout(), &cob.object)?
             } else {
-                anyhow::bail!("the type name '{}' is unknown", options.type_name);
+                let Some(cob) = cob::get::<Helper, _>(&repo, &type_name, oid)? else {
+                    anyhow::bail!(cob::store::Error::NotFound(type_name, *oid))
+                };
+                serde_json::to_writer_pretty(std::io::stdout(), &cob.object())?;
             }
             println!();
         }
