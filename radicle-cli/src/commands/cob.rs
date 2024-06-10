@@ -80,7 +80,11 @@ struct Embed {
 }
 
 enum Operation {
-    Act(Rev),
+    Act {
+        oid: Rev,
+        message: String,
+        actions: PathBuf,
+    },
     Create {
         message: String,
         actions: PathBuf,
@@ -198,7 +202,15 @@ impl Args for Options {
             Options {
                 op: {
                     match op {
-                        Act => Operation::Act(oid.unwrap()),
+                        Act => Operation::Act {
+                            oid: oid.unwrap(),
+                            message: message.ok_or_else(|| {
+                                anyhow!("a message must be specified with `--message`")
+                            })?,
+                            actions: actions.ok_or_else(|| {
+                                anyhow!("a file containing initial actions must be specified")
+                            })?,
+                        },
                         Create => Operation::Create {
                             message: message.ok_or_else(|| {
                                 anyhow!("a message must be specified with `--message`")
@@ -233,8 +245,32 @@ pub fn run(options: Options, ctx: impl term::Context) -> anyhow::Result<()> {
     let repo = storage.repository(rid)?;
 
     match op {
-        Operation::Act(_oid) => {
-            todo!();
+        Operation::Act {
+            oid,
+            actions,
+            message,
+        } => {
+            let repo = storage.repository_mut(rid)?;
+            let oid = oid.resolve(&repo.backend)?;
+            let reader = JsonLinesReader::new(BufReader::new(File::open(actions)?));
+
+            if type_name == cob::patch::TYPENAME.clone() {
+                todo!("patch")
+            } else if type_name == cob::issue::TYPENAME.clone() {
+                todo!("issue")
+            } else if type_name == cob::identity::TYPENAME.clone() {
+                todo!("identity")
+            } else {
+                let store: cob::store::Store<radicle::cob::helper::Helper, _> =
+                    cob::store::Store::open(&repo)?;
+                let actions = reader
+                    .read_all::<radicle::cob::helper::Action>()
+                    .collect::<std::io::Result<Vec<_>>>()?;
+                let actions = NonEmpty::from_vec(actions)
+                    .ok_or_else(|| anyhow::anyhow!("at least one action is required"))?;
+                store.update_raw(&type_name, oid, &message, actions, vec![], &profile.signer()?)?;
+                println!("{}", oid)
+            }
         }
         Operation::Create {
             message,

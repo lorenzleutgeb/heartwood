@@ -165,19 +165,25 @@ pub struct TestFormula {
     subs: Substitutions,
     /// Binaries path.
     bins: Vec<PathBuf>,
+    /// Additional files to copy to the directory in which the test is run.
+    files: Vec<PathBuf>,
 }
 
 impl TestFormula {
     pub fn new(cwd: PathBuf) -> Self {
+        let mut bins: Vec<PathBuf> = env::var("PATH")
+                .map(|p| p.split(':').map(PathBuf::from).collect())
+                .unwrap_or_default();
+        bins.insert(0, cwd.clone());
+
         Self {
             cwd,
             env: HashMap::new(),
             homes: HashMap::new(),
             tests: Vec::new(),
             subs: Substitutions::new(),
-            bins: env::var("PATH")
-                .map(|p| p.split(':').map(PathBuf::from).collect())
-                .unwrap_or_default(),
+            bins,
+            files: vec![],
         }
     }
 
@@ -280,6 +286,13 @@ impl TestFormula {
             Err(err) => return Err(err.into()),
         };
         self.read(path, io::Cursor::new(contents))
+    }
+
+    pub fn files(&mut self, files: Vec<impl AsRef<Path>>) -> &mut Self {
+        for file in files.iter().map(|file| file.as_ref().to_path_buf()) {
+            self.files.push(file)
+        }
+        self
     }
 
     pub fn read(&mut self, path: &Path, r: impl io::BufRead) -> Result<&mut Self, Error> {
@@ -403,6 +416,11 @@ impl TestFormula {
         let mut runner = TestRunner::new(self);
 
         fs::create_dir_all(&self.cwd)?;
+
+        for file in &self.files {
+            std::fs::copy(file, &self.cwd.join(file.file_name().expect("files copied to the test runner execution context should have a sane file name")))?;
+        }
+
         log::debug!(target: "test", "Using PATH {:?}", self.bins);
 
         // For each code block.
@@ -550,6 +568,7 @@ $ rad sync
                 .split(':')
                 .map(PathBuf::from)
                 .collect(),
+            files: vec![],
             tests: vec![
                 Test {
                     context: vec![String::from("Let's try to track @dave and @sean:")],

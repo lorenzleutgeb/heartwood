@@ -1,10 +1,9 @@
-#! /usr/bin/env -S jq --from-file
+#! /bin/sh
 
-reduce
-    (if has("actions") then .actions[] else inputs end)
-as {"+": $p, "-": $m} (
-    {};
-    .[$p // $m // ("invalid" | halt_error)] |= (
-        [. + (if $p then 1 else -1 end), 0] | max
-    )
-)
+INIT="--argjson init [{}]"
+if [ "$#" == "1" ]
+then
+	INIT="--slurpfile init \"$1\""
+fi
+
+jq $INIT --sort-keys --from-file multiset.jq

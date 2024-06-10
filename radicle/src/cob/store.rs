@@ -151,6 +151,19 @@ where
         embeds: Vec<Embed>,
         signer: &G,
     ) -> Result<Updated<T>, Error> {
+        self.update_raw(T::type_name(), object_id, message, actions, embeds, signer)
+    }
+
+    /// Update an object.
+    pub fn update_raw<G: Signer>(
+        &self,
+        type_name: &TypeName,
+        object_id: ObjectId,
+        message: &str,
+        actions: impl Into<NonEmpty<T::Action>>,
+        embeds: Vec<Embed>,
+        signer: &G,
+    ) -> Result<Updated<T>, Error> {
         let actions = actions.into();
         let related = actions.iter().flat_map(T::Action::parents).collect();
         let changes = actions.try_map(encoding::encode)?;
@@ -162,7 +175,7 @@ where
             signer.public_key(),
             Update {
                 object_id,
-                type_name: T::type_name().clone(),
+                type_name: type_name.clone(),
                 message: message.to_owned(),
                 embeds,
                 changes,

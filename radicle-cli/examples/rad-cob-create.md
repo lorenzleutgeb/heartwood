@@ -36,28 +36,103 @@ The expected result after evaluating all actions is:
 Or, in JSON:
 
 {
-  "peanut butter": 1,
   "jelly": 0,
+  "peanut butter": 1,
   "salad": 2
 }
 
 We can implement a program that evaluates the contents of `groceries.jsonl`.
 Here's one way of doing that with [jq]:
 
-```
-$ ./rad-cob-multiset -- groceries.jsonl
-{
-  "peanut butter": 1,
-  "jelly": 0,
-  "salad": 2
-}
-```
-
 Let's now create a COB:
 
 ```
 $ rad cob create --repo rad:z42hL2jL4XNk6K8oHQaSWfMgCL7ji --type com.example.multiset --message "Create grocery shopping multiset" groceries.jsonl
-abc
+c8e82d31fd8bf6e2e15172e7016f3a6ecdaca9b1
+```
+
+```
+$ rad cob show --repo rad:z42hL2jL4XNk6K8oHQaSWfMgCL7ji --type com.example.multiset --object c8e82d31fd8bf6e2e15172e7016f3a6ecdaca9b1
+{
+  "jelly": 0,
+  "peanut butter": 1,
+  "salad": 2
+}
+```
+
+```
+$ rad cob act --repo rad:z42hL2jL4XNk6K8oHQaSWfMgCL7ji --type com.example.multiset --object c8e82d31fd8bf6e2e15172e7016f3a6ecdaca9b1 --message "Duplicate groceries" groceries.jsonl
+c8e82d31fd8bf6e2e15172e7016f3a6ecdaca9b1
+```
+
+```
+$ rad cob log --repo rad:z42hL2jL4XNk6K8oHQaSWfMgCL7ji --type com.example.multiset --object c8e82d31fd8bf6e2e15172e7016f3a6ecdaca9b1
+commit   32d284202be625e3f90d4eb3f352bdda5f37eea3
+parent   c8e82d31fd8bf6e2e15172e7016f3a6ecdaca9b1
+author   z6MknSLrJoTcukLrE435hVNQT4JUhbvWLX4kUzqkEStBU8Vi
+date     Thu, 15 Dec 2022 17:28:04 +0000
+
+    {
+      "+": "jelly"
+    }
+
+    {
+      "+": "peanut butter"
+    }
+
+    {
+      "-": "jelly"
+    }
+
+    {
+      "-": "jelly"
+    }
+
+    {
+      "+": "salad"
+    }
+
+    {
+      "+": "salad"
+    }
+
+commit   c8e82d31fd8bf6e2e15172e7016f3a6ecdaca9b1
+author   z6MknSLrJoTcukLrE435hVNQT4JUhbvWLX4kUzqkEStBU8Vi
+date     Thu, 15 Dec 2022 17:28:04 +0000
+
+    {
+      "+": "jelly"
+    }
+
+    {
+      "+": "peanut butter"
+    }
+
+    {
+      "-": "jelly"
+    }
+
+    {
+      "-": "jelly"
+    }
+
+    {
+      "+": "salad"
+    }
+
+    {
+      "+": "salad"
+    }
+
+```
+
+```
+$ rad cob show --repo rad:z42hL2jL4XNk6K8oHQaSWfMgCL7ji --type com.example.multiset --object c8e82d31fd8bf6e2e15172e7016f3a6ecdaca9b1
+{
+  "jelly": 0,
+  "peanut butter": 2,
+  "salad": 4
+}
 ```
 
 [multisets]: https://wikipedia.org/wiki/Multiset

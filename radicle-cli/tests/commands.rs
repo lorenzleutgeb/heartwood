@@ -87,6 +87,18 @@ fn test<'a>(
     home: Option<&Home>,
     envs: impl IntoIterator<Item = (&'a str, &'a str)>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    test_with_files(test, cwd, home, envs, vec![] as Vec<std::path::PathBuf>)
+}
+ 
+/// Run a CLI test file that requires other files
+/// in the working directory.
+fn test_with_files<'a>(
+    test: impl AsRef<Path>,
+    cwd: impl AsRef<Path>,
+    home: Option<&Home>,
+    envs: impl IntoIterator<Item = (&'a str, &'a str)>,
+    files: Vec<impl AsRef<Path>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir().unwrap();
     let home = if let Some(home) = home {
         home.path().to_path_buf()
@@ -97,6 +109,7 @@ fn test<'a>(
     formula(cwd.as_ref(), test)?
         .env("RAD_HOME", home.to_string_lossy())
         .envs(envs)
+        .files(files)
         .run()?;
 
     Ok(())
@@ -162,25 +175,11 @@ fn rad_cob_create() {
     let home = &profile.home;
     let working = environment.tmp().join("working");
 
-    let base = Path::new(env!("CARGO_MANIFEST_DIR"));
-    std::fs::create_dir_all(base).unwrap();
-    std::fs::create_dir_all(working.clone()).unwrap();
-    std::fs::copy(
-        base.join("examples").join("groceries.jsonl"),
-        working.join("groceries.jsonl"),
-    )
-    .unwrap();
-    std::fs::copy(
-        base.join("examples").join("rad-cob-multiset"),
-        working.join("rad-cob-multiset"),
-    )
-    .unwrap();
-
     // Setup a test repository.
     fixtures::repository(&working);
 
     test("examples/rad-init.md", &working, Some(home), []).unwrap();
-    test("examples/rad-cob-create.md", &working, Some(home), []).unwrap();
+    test_with_files("examples/rad-cob-create.md", &working, Some(home), [], vec!["examples/groceries.jsonl", "examples/rad-cob-multiset", "examples/multiset.jq"]).unwrap();
 }
 
 #[test]
