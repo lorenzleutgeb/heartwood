@@ -12,6 +12,8 @@ pub use std::net::TcpStream as Stream;
 #[cfg(unix)]
 pub use std::os::unix::net::UnixStream as Stream;
 
+use super::ExtendedSignature;
+
 pub struct Agent {
     client: AgentClient<Stream>,
 }
@@ -51,6 +53,21 @@ impl DerefMut for Agent {
 pub struct AgentSigner {
     agent: Mutex<Agent>,
     public: PublicKey,
+}
+
+impl signature::Signer<Signature> for AgentSigner {
+    fn try_sign(&self, msg: &[u8]) -> Result<Signature, signature::Error> {
+        Signer::try_sign(self, msg).map_err(signature::Error::from_source)
+    }
+}
+
+impl signature::Signer<ExtendedSignature> for AgentSigner {
+    fn try_sign(&self, msg: &[u8]) -> Result<ExtendedSignature, signature::Error> {
+        Ok(ExtendedSignature {
+            key: self.public,
+            sig: Signer::try_sign(self, msg).map_err(signature::Error::from_source)?,
+        })
+    }
 }
 
 impl AgentSigner {

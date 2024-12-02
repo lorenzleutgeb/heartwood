@@ -6,9 +6,11 @@ use std::time;
 
 use anyhow::anyhow;
 use radicle::issue::cache::Issues as _;
+use radicle::node::device::Device;
 use radicle::patch::cache::Patches as _;
 use thiserror::Error;
 
+use radicle::crypto;
 use radicle::git::raw;
 use radicle::identity::doc;
 use radicle::identity::doc::{DocError, RepoId};
@@ -229,13 +231,13 @@ pub enum CloneError {
     Fetch(#[from] sync::FetchError),
 }
 
-pub fn clone<G: Signer>(
+pub fn clone<G: crypto::signature::Signer<crypto::Signature>>(
     id: RepoId,
     directory: Option<PathBuf>,
     scope: Scope,
     settings: SyncSettings,
     node: &mut Node,
-    signer: &G,
+    signer: &Device<G>,
     profile: &Profile,
 ) -> Result<(raw::Repository, storage::git::Repository, Doc, Project), CloneError> {
     let me = *signer.public_key();

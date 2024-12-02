@@ -1,7 +1,8 @@
 use radicle::cob::issue::Issue;
 use radicle::cob::thread::{Comment, CommentId};
 use radicle::crypto::ssh::keystore::MemorySigner;
-use radicle::crypto::{ssh::Keystore, Signer};
+use radicle::crypto::ssh::Keystore;
+use radicle::node::device::{BoxedDevice, Device};
 use radicle::profile::env::RAD_PASSPHRASE;
 use radicle::profile::Profile;
 
@@ -41,7 +42,7 @@ impl inquire::validator::StringValidator for PassphraseValidator {
 
 /// Get the signer. First we try getting it from ssh-agent, otherwise we prompt the user,
 /// if we're connected to a TTY.
-pub fn signer(profile: &Profile) -> anyhow::Result<Box<dyn Signer>> {
+pub fn signer(profile: &Profile) -> anyhow::Result<BoxedDevice> {
     if let Ok(signer) = profile.signer() {
         return Ok(signer);
     }
@@ -60,7 +61,7 @@ pub fn signer(profile: &Profile) -> anyhow::Result<Box<dyn Signer>> {
 
     spinner.finish();
 
-    Ok(signer.boxed())
+    Ok(Device::from(signer).boxed())
 }
 
 pub fn comment_select(issue: &Issue) -> Option<(&CommentId, &Comment)> {

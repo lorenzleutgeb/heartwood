@@ -1973,6 +1973,7 @@ dependencies = [
  "radicle-git-ext",
  "serde",
  "serde_json",
+ "signature 2.2.0",
  "tempfile",
  "thiserror",
 ]
@@ -2005,6 +2006,7 @@ dependencies = [
  "radicle-git-ext",
  "radicle-ssh",
  "serde",
+ "signature 2.2.0",
  "sqlite",
  "ssh-key",
  "tempfile",
