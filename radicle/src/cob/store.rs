@@ -143,7 +143,7 @@ where
 
 impl<'a, T, R> Store<'a, T, R>
 where
-    R: ReadRepository + SignRepository + cob::Store,
+    R: ReadRepository + SignRepository + cob::Store<Namespace = NodeId>,
     T: Cob + cob::Evaluate<R>,
     T::Action: Serialize,
 {
@@ -333,7 +333,7 @@ where
     where
         G: crypto::signature::Signer<crypto::Signature>,
         F: FnOnce(&mut Self, &R) -> Result<(), Error>,
-        R: ReadRepository + SignRepository + cob::Store,
+        R: ReadRepository + SignRepository + cob::Store<Namespace = NodeId>,
         T::Action: Serialize + Clone,
     {
         let mut tx = Transaction::default();
@@ -370,7 +370,7 @@ where
         signer: &Device<G>,
     ) -> Result<(T, EntryId), Error>
     where
-        R: ReadRepository + SignRepository + cob::Store,
+        R: ReadRepository + SignRepository + cob::Store<Namespace = NodeId>,
         T::Action: Serialize + Clone,
         G: crypto::signature::Signer<crypto::Signature>,
     {

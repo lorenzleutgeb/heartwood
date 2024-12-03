@@ -17,6 +17,7 @@ use crate::cob::thread::{Comment, CommentId, Thread};
 use crate::cob::{op, store, ActorId, Embed, EntryId, ObjectId, TypeName};
 use crate::identity::doc::DocError;
 use crate::node::device::Device;
+use crate::node::NodeId;
 use crate::prelude::{Did, Doc, ReadRepository, RepoId};
 use crate::storage::{HasRepoId, RepositoryError, WriteRepository};
 
@@ -587,7 +588,7 @@ impl<'a, 'g, R, C> std::fmt::Debug for IssueMut<'a, 'g, R, C> {
 
 impl<'a, 'g, R, C> IssueMut<'a, 'g, R, C>
 where
-    R: WriteRepository + cob::Store,
+    R: WriteRepository + cob::Store<Namespace = NodeId>,
     C: cob::cache::Update<Issue>,
 {
     /// Reload the issue data from storage.
@@ -803,7 +804,7 @@ where
 
 impl<'a, R> Issues<'a, R>
 where
-    R: WriteRepository + cob::Store,
+    R: WriteRepository + cob::Store<Namespace = NodeId>,
 {
     /// Create a new issue.
     pub fn create<'g, G, C>(

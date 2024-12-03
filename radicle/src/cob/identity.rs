@@ -11,6 +11,7 @@ use thiserror::Error;
 
 use crate::identity::doc::Doc;
 use crate::node::device::Device;
+use crate::node::NodeId;
 use crate::{
     cob,
     cob::{
@@ -182,13 +183,14 @@ impl Identity {
         }
     }
 
-    pub fn initialize<'a, R: WriteRepository + cob::Store, G>(
+    pub fn initialize<'a, R, G>(
         doc: &Doc,
         store: &'a R,
         signer: &Device<G>,
     ) -> Result<IdentityMut<'a, R>, cob::store::Error>
     where
         G: crypto::signature::Signer<crypto::Signature>,
+        R: WriteRepository + cob::Store<Namespace = NodeId>,
     {
         let mut store = cob::store::Store::open(store)?;
         let (id, identity) = Transaction::<Identity, _>::initial(
@@ -884,7 +886,7 @@ impl<'a, R> fmt::Debug for IdentityMut<'a, R> {
 
 impl<'a, R> IdentityMut<'a, R>
 where
-    R: WriteRepository + cob::Store,
+    R: WriteRepository + cob::Store<Namespace = NodeId>,
 {
     /// Reload the identity data from storage.
     pub fn reload(&mut self) -> Result<(), store::Error> {

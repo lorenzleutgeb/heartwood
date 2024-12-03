@@ -10,6 +10,7 @@ use crate::cob::cache::{Remove, StoreReader, StoreWriter, Update};
 use crate::cob::store;
 use crate::cob::{Embed, Label, ObjectId, TypeName, Uri};
 use crate::node::device::Device;
+use crate::node::NodeId;
 use crate::prelude::{Did, RepoId};
 use crate::storage::{HasRepoId, ReadRepository, RepositoryError, SignRepository, WriteRepository};
 
@@ -83,7 +84,7 @@ impl<'a, R, C> Cache<super::Issues<'a, R>, C> {
         signer: &Device<G>,
     ) -> Result<IssueMut<'a, 'g, R, C>, super::Error>
     where
-        R: ReadRepository + WriteRepository + cob::Store,
+        R: ReadRepository + WriteRepository + cob::Store<Namespace = NodeId>,
         G: crypto::signature::Signer<crypto::Signature>,
         C: Update<Issue>,
     {
@@ -103,7 +104,7 @@ impl<'a, R, C> Cache<super::Issues<'a, R>, C> {
     pub fn remove<G>(&mut self, id: &IssueId, signer: &Device<G>) -> Result<(), super::Error>
     where
         G: crypto::signature::Signer<crypto::Signature>,
-        R: ReadRepository + SignRepository + cob::Store,
+        R: ReadRepository + SignRepository + cob::Store<Namespace = NodeId>,
         C: Remove<Issue>,
     {
         self.store.remove(id, signer)?;
