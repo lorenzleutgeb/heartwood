@@ -263,6 +263,7 @@
           cargo-deny
           cargo-watch
           cargo-nextest
+          cargo-semver-checks
           ripgrep
           rust-analyzer
           sqlite
